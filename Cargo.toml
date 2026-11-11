@@ -1,0 +1,27 @@
+[package]
+name = "peakmark"
+version = "0.1.0"
+edition = "2024"
+description = "Gate WebAssembly modules on size and memory against a baseline kept in the repository"
+license = "MIT"
+keywords = ["wasm", "webassembly", "memory", "size", "budget"]
+categories = ["command-line-utilities", "wasm", "development-tools"]
+exclude = ["plan/**"]
+
+# brotli at quality 11 takes minutes per megabyte when it is not optimised,
+# so the dependencies are optimised in debug builds too.
+[profile.dev.package."*"]
+opt-level = 3
+
+[dependencies]
+brotli = "9.1.1"
+flate2 = "1.1.11"
+runemark = "0.10.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+wasmparser = "0.263.0"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+wat = "1.263.0"
