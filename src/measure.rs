@@ -116,8 +116,9 @@ fn gzip_len(bytes: &[u8]) -> u64 {
     encoder.finish().expect("writing to a Vec").len() as u64
 }
 
-/// brotli at quality 11 with a 22-bit window, the defaults of the reference
-/// encoder and of `node:zlib`.
+/// brotli at quality 11 with a 22-bit window, the settings of the reference
+/// encoder and of `node:zlib`. This encoder is a Rust port: on the same
+/// settings it lands about 0.1 % above the reference, not on the same byte.
 fn brotli_len(bytes: &[u8]) -> u64 {
     let mut compressed = Vec::new();
     brotli::CompressorWriter::new(&mut compressed, 4096, 11, 22)
