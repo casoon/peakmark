@@ -6,6 +6,21 @@ change the configuration, the baseline format or the output.
 
 ## [Unreleased]
 
+### Added
+
+- **Config:** `scenario_timeout` and a `timeout` per `[[scenario]]` set how long a scenario may
+  run; the default is 60 seconds. Details:
+  [Limits](https://casoon.github.io/peakmark/docs/reference/limits/#scenario-deadline).
+
+### Fixed
+
+- **Scenarios:** a scenario that never returns, awaits a promise that never settles or prints
+  without end no longer blocks `check` and `accept` or exhausts memory. It is stopped, with the
+  processes it started on Unix, and the check exits with 2 naming the module, the scenario and the
+  deadline.
+- **Scenarios:** a timer or socket left open by a scenario no longer keeps Node, and the check,
+  waiting after the result is written.
+
 ## [0.1.1] - 2026-11-12
 
 ### Changed

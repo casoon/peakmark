@@ -16,7 +16,8 @@ export default async function (engine) {
 ```
 
 peakmark runs the function `repeat` times in one fresh Node process, then reads the module's linear
-memory. A scenario that throws stops the check and its message is shown.
+memory. A scenario that throws stops the check and its message is shown. A scenario that does not
+finish within its [deadline](../../reference/limits/#scenario-deadline) is stopped the same way.
 
 ## What the function receives
 
@@ -40,3 +41,11 @@ budget of `"0"` then fails when a leak appears.
 
 Each scenario runs in its own Node process. With several scenarios on a module, the module's value
 is the highest one, and a finding names the scenario it came from.
+
+## Time and output
+
+A scenario has 60 seconds by default. Set `timeout = "5m"` on a scenario, or `scenario_timeout` at
+the top of `peakmark.toml`, if a flow needs longer. The deadline is for the whole scenario, so with a
+large `repeat` count all runs. Awaiting a promise that never resolves, or a loop that never ends, ends
+in a failure that names the scenario. Log as much as you like; only the end of stderr is kept for
+failure messages.
