@@ -4,7 +4,7 @@ Gate WebAssembly modules on size and memory against a baseline kept in the
 repository.
 
 peakmark measures a built `.wasm` module — its size on disk and on the wire,
-and the linear memory it holds after a scenario — and compares the result with
+and the capacity of its linear memory after a scenario — and compares the result with
 a budget and with the values you last accepted. Over the budget, the check
 fails. Past the baseline, it warns and names the command that accepts the
 growth on purpose.

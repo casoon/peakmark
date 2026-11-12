@@ -33,9 +33,25 @@ nothing proves nothing about memory.
 
 ## Release what you allocate
 
-`growth_per_run` is what each run after the first adds, averaged. Free what the scenario creates
-(`free()` on wasm-bindgen objects) and a run that returns to its starting point adds nothing. A
-budget of `"0"` then fails when a leak appears.
+`growth_per_run` is the capacity each run after the first adds, averaged, in whole pages. Free
+what the scenario creates (`free()` on wasm-bindgen objects), so that a run returns to its
+starting point and does not pile up pages.
+
+A budget of `"0"` fails when capacity keeps growing from run to run. It does not prove that the
+module is free of leaks: a leak that fits in pages the module already reserved does not change
+capacity, and a longer run can show growth a short one hides. Use `repeat` large enough for the
+flow to settle, read the per-run trace in `--json` (`after_run`), and treat `"0"` as a check for
+page growth.
+
+The first run is a warm-up and not part of `growth_per_run`; `check --details` shows what it added
+next to the later growth.
+
+## What is measured when a scenario loads modules
+
+Only instances of the configured artifact count, however they are created (`instantiate`,
+`new WebAssembly.Instance`, streaming). Other modules a scenario loads are left out of the values,
+and a memory several instances share is counted once. A module the scenario runs in a worker
+thread is not seen; peakmark reports that as not observed.
 
 ## Several scenarios
 

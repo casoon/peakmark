@@ -22,7 +22,10 @@ Per module, the baseline keeps:
   `growth_per_run` of any scenario. They are a summary, and the basis for budgets, which always
   judge the module-wide maximum.
 - **`scenarios`**: the memory values of each scenario, under its identity. Growth is compared here,
-  so a scenario that grows is found even while another scenario holds more memory.
+  so a scenario that grows is found even while another scenario holds more memory. Since the
+  memory trace was added, an entry also keeps `after_instantiate`, `after_run` and what was not
+  observed; they are for reading and are not compared. An entry without them stays valid and is
+  never read as zero.
 - **`contract`**: what the values were measured under (see below).
 
 A scenario's identity is its `file` as written in `peakmark.toml`, once per module. Renaming the
@@ -70,6 +73,7 @@ automatically, and a value that was not measured is never counted as zero.
 | `baseline/metric-missing` | a value was accepted and is not measured now, for example `peak_memory` after the scenarios were removed |
 | `baseline/incomparable` | a measurement exists but cannot be compared, and says why |
 | `baseline/runtime` | a note: the Node version differs from the accepted one |
+| `memory/coverage` | a note: part of what the scenario should measure was not observed, see [What is not observed](../measurements/#what-is-not-observed) |
 
 All of these leave the exit code at 0, like growth, and turn the verdict to `warning`. Removing a
 scenario or a budget on purpose is a decision, and accepting is how it is recorded:

@@ -6,9 +6,19 @@ order: 3
 
 - gzip and brotli sizes come from peakmark's own encoders. Another encoder at the same settings
   lands within a fraction of a percent, not on the same byte.
+- Memory means the capacity of the module's linear memories, not live allocations. Pages the
+  module already reserved can fill up without any change, so a leak inside them is invisible; JS
+  heap, runtime-native allocations and WebAssembly GC objects are not measured.
+  [Details](../../concepts/measurements/#what-the-memory-values-are).
 - Memory is counted in pages of 64 KiB. Growth smaller than a page per run shows only once it
-  crosses a page; raise `repeat` to see it.
-- A memory the module imports instead of exporting is not seen.
+  crosses a page; raise `repeat` to see it. More runs can expose growth, they cannot prove there
+  is none.
+- Only instances of the configured artifact are measured. Memory of other modules the scenario
+  loads is left out, and a memory held by several instances is counted once.
+- A memory the module declares and neither exports nor imports, and a module run in a worker
+  thread, are not seen. They are reported as not observed, never as zero.
+- The sum over memories adds capacities of instances that may not have lived together. It is not
+  the peak of the process.
 - Scenarios run in Node, not in a browser: DOM and layout are not part of the measurement.
 - Only core modules are measured. A component is refused with exit code 2, as is a module that
   uses a feature outside WebAssembly 3.0.

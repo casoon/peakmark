@@ -4,16 +4,17 @@ description: What peakmark gates, where it stops, and how this documentation is 
 order: 0
 ---
 
-peakmark measures a built `.wasm` module — its size on disk and on the wire, and the linear memory
-it holds after a scenario — and compares the result with a budget and with the values you last
+peakmark measures a built `.wasm` module — its size on disk and on the wire, and the capacity of its
+linear memory after a scenario — and compares the result with a budget and with the values you last
 accepted. Over the budget, the check fails. Past the baseline, it warns and names the command that
 accepts the growth on purpose.
 
 ## What it covers
 
 - Size of the file: raw, gzip and brotli.
-- Peak memory and growth per run, read from the module's own linear memory by running a scenario
-  in Node.
+- Peak memory capacity and its growth per run, read from the module's own linear memory by running
+  a scenario in Node. Capacity is not live allocation; see
+  [what the memory values are](concepts/measurements/#what-the-memory-values-are).
 - A budget per module in `peakmark.toml` and a baseline in the repository, with the reason for
   every change.
 

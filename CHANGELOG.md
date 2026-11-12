@@ -15,9 +15,23 @@ change the configuration, the baseline format or the output.
   measurements that cannot be compared, as warnings with exit code 0 until the baseline is
   accepted again. Details:
   [Changed coverage](https://casoon.github.io/peakmark/docs/concepts/budget-and-baseline/#changed-coverage).
+- **Memory:** `--json` and the baseline keep the capacity after instantiation and after every run;
+  `check --details` shows the first run apart from the later ones. Details:
+  [What the memory values are](https://casoon.github.io/peakmark/docs/concepts/measurements/#what-the-memory-values-are).
+- **Memory:** what could not be observed (a declared memory that is neither exported nor imported,
+  a module run in a worker) is reported as a `memory/coverage` note and under `coverage` in
+  `--json`, never as zero. Details:
+  [What is not observed](https://casoon.github.io/peakmark/docs/concepts/measurements/#what-is-not-observed).
 
 ### Changed
 
+- **Memory:** values cover the instances of the configured artifact only; other modules a
+  scenario loads are left out and a shared memory is counted once. Details:
+  [What is covered](https://casoon.github.io/peakmark/docs/concepts/measurements/#what-is-covered).
+- **Docs:** memory is described as exported linear-memory capacity in pages, not live allocation,
+  JS heap or GC objects; a growth budget of `"0"` is a check for page growth and does not prove the
+  absence of leaks. Details:
+  [Release what you allocate](https://casoon.github.io/peakmark/docs/guides/scenarios/#release-what-you-allocate).
 - **Baseline:** the format is version 2: memory per scenario plus the measurement contract.
   Version 1 files are still read, any other version exits with 2, and `accept` writes the file
   atomically. Details:

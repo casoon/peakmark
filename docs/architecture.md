@@ -16,11 +16,11 @@ src/
 ├── lib.rs         crate documentation and the module list
 ├── cli/           arguments (args.rs), commands (commands.rs), exit codes (mod.rs)
 ├── config.rs      peakmark.toml: modules, budgets, scenarios, validation
-├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values, contract) and the history log
+├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values and trace, contract) and the history log
 ├── measure.rs     one module in, one Measured out
 ├── wasm.rs        validation, sections and declared memory, read with wasmparser
 ├── compress.rs    gzip and brotli length
-├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory it held
+├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
 ├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
 ├── report/        text report (text.rs) and JSON (json.rs)
 ├── metric.rs      Metric and Values: the five gated values
@@ -56,8 +56,14 @@ module values, per-scenario values, contract) and the reason.
 
 ## Responsibilities
 
-- **Only `runner` starts Node**, and only `runner.mjs` knows how a module is instantiated. Nothing
-  else depends on the scenario protocol, a single `PEAKMARK_RESULT` line on stdout.
+- **Only `runner` starts Node**, and only `runner.mjs` knows how a module is instantiated and which
+  of its memories are watched. Nothing else depends on the scenario protocol, a single
+  `PEAKMARK_RESULT` line on stdout.
+- **Memory means capacity of the configured module's observed memories.** `runner.mjs` attributes
+  an instance to the configured module by the bytes it was compiled from, holds memories weakly,
+  counts a shared memory once, and reports what it could not watch. `runner.rs` adds what only the
+  artifact knows (declared memories, via `wasm`) and turns that into `Coverage`; `check` shows it
+  as a note and never as a number.
 - **Only `check` decides** what is an error and what is a warning. `report` formats those decisions
   and does not make its own.
 - **Only `error` owns message text.** Modules return `Error` variants that carry the path or name
