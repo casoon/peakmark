@@ -6,7 +6,6 @@ use runemark::{Console, Verdict};
 use crate::baseline::{self, Baseline};
 use crate::check;
 use crate::config::{Config, Module};
-use crate::date::today;
 use crate::error::Error;
 use crate::measure::measure;
 use crate::report;
@@ -67,11 +66,7 @@ pub(super) fn accept(
         }
         accepted.push((
             module.name.clone(),
-            baseline::Entry {
-                accepted: today(),
-                reason: reason.to_string(),
-                values: result.measured.values,
-            },
+            baseline::Entry::from_measured(&result.measured, reason),
         ));
     }
 

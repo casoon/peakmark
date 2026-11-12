@@ -66,11 +66,7 @@ fn growth_past_an_accepted_baseline_is_a_warning() {
     let mut stored = baseline::load(&config.dir).unwrap();
     stored.modules.insert(
         "fixture".to_string(),
-        baseline::Entry {
-            accepted: "2026-01-01".to_string(),
-            reason: "test".to_string(),
-            values: first.values,
-        },
+        baseline::Entry::from_measured(&first, "test"),
     );
     baseline::save(&config.dir, &stored).unwrap();
 

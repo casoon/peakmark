@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::baseline;
 use crate::config::ConfigError;
 use crate::units::format_duration;
 
@@ -59,6 +60,13 @@ pub enum Error {
         path: PathBuf,
         /// The cause.
         source: serde_json::Error,
+    },
+    /// The baseline file declares a format version this peakmark does not read.
+    BaselineVersion {
+        /// The baseline file.
+        path: PathBuf,
+        /// The version it declares.
+        found: u32,
     },
     /// The artifact is not a valid WebAssembly module.
     InvalidModule {
@@ -187,6 +195,24 @@ impl fmt::Display for Error {
             Self::ConfigSyntax { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Config { path, source } => write!(f, "{}: {source}", path.display()),
             Self::BaselineSyntax { path, source } => write!(f, "{}: {source}", path.display()),
+            Self::BaselineVersion { path, found } => {
+                let (oldest, newest) = (baseline::OLDEST_VERSION, baseline::VERSION);
+                write!(f, "{} has format version {found}; ", path.display())?;
+                if *found > newest {
+                    write!(
+                        f,
+                        "this peakmark reads versions {oldest} to {newest}. \
+                         The file was written by a newer peakmark: update peakmark"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "this peakmark reads versions {oldest} to {newest}. \
+                         Delete the file and run `peakmark accept --all --reason \"...\"` \
+                         to accept the current values again"
+                    )
+                }
+            }
             Self::InvalidModule { path, source } => write!(
                 f,
                 "{} is not a valid WebAssembly module: {source}",
@@ -273,7 +299,8 @@ impl std::error::Error for Error {
             Self::InvalidModule { source, .. } | Self::UnsupportedFeature { source, .. } => {
                 Some(source)
             }
-            Self::UnsupportedComponent { .. }
+            Self::BaselineVersion { .. }
+            | Self::UnsupportedComponent { .. }
             | Self::ScenarioFailed { .. }
             | Self::ScenarioTimeout { .. }
             | Self::ScenarioNoResult { .. }
