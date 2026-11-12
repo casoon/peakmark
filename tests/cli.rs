@@ -344,3 +344,201 @@ fn a_valid_module_without_a_scenario_still_passes() {
 
     assert_eq!(run.code, 0, "{}", run.stderr);
 }
+
+/// A configuration whose one scenario has a deadline of its own.
+fn timed_config(scenario: &str, timeout: &str) -> String {
+    format!(
+        r#"[[module]]
+name = "fixture"
+artifact = "fixture.wasm"
+
+[[scenario]]
+module = "fixture"
+file = "{scenario}"
+timeout = "{timeout}"
+"#
+    )
+}
+
+const SPIN: &str = "export default () => {
+  for (;;) {}
+};
+";
+
+/// The promise never settles and a timer keeps Node alive, as an open socket would.
+const PENDING: &str = "export default () => {
+  setInterval(() => {}, 1000);
+  return new Promise(() => {});
+};
+";
+
+/// The scenario is done, a timer it left behind is not.
+const LEFTOVER_HANDLE: &str = "export default (module) => {
+  module.grow(1);
+  setInterval(() => {}, 1000);
+};
+";
+
+/// Ordinary output, a lot of it, from an asynchronous scenario that finishes.
+const CHATTY: &str = "export default async (module) => {
+  for (let i = 0; i < 2000; i++) {
+    process.stdout.write('x'.repeat(65536) + '\\n');
+    process.stderr.write('y'.repeat(65536) + '\\n');
+  }
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  module.grow(1);
+};
+";
+
+/// Floods stderr with something recognisable at the end, then never returns.
+const FLOOD_AND_SPIN: &str = "import { writeSync } from 'node:fs';
+export default () => {
+  for (let i = 0; i < 300; i++) writeSync(2, 'y'.repeat(65536) + '\\n');
+  writeSync(2, 'the last words\\n');
+  for (;;) {}
+};
+";
+
+const FLOOD_AND_FAIL: &str = "export default () => {
+  for (let i = 0; i < 2000; i++) process.stderr.write('y'.repeat(65536) + '\\n');
+  throw new Error('the real reason');
+};
+";
+
+/// Starts a process that holds the same pipes and outlives its parent, then hangs.
+#[cfg(unix)]
+const SPAWN_AND_SPIN: &str = "import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+export default () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'inherit',
+  });
+  writeFileSync('descendant.pid', String(child.pid));
+  for (;;) {}
+};
+";
+
+fn timed_project(name: &str, scenario: &str, source: &str, timeout: &str) -> Project {
+    let project = Project::new(name, &timed_config(scenario, timeout));
+    project.write(scenario, source);
+    project
+}
+
+#[test]
+fn a_scenario_that_never_returns_is_stopped_and_named() {
+    let project = timed_project("timeout-spin", "spin.mjs", SPIN, "1s");
+    let started = std::time::Instant::now();
+    let run = project.run(&["check"]);
+
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "scenario spin.mjs of module `fixture`");
+    assert_contains(&run.stderr, "did not finish within 1s");
+}
+
+#[test]
+fn a_promise_that_never_settles_is_stopped() {
+    let project = timed_project("timeout-pending", "pending.mjs", PENDING, "1s");
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "scenario pending.mjs of module `fixture`");
+    assert_contains(&run.stderr, "did not finish within 1s");
+}
+
+#[test]
+fn a_timer_left_behind_does_not_hold_the_check() {
+    let project = timed_project("leftover", "leftover.mjs", LEFTOVER_HANDLE, "30s");
+    let started = std::time::Instant::now();
+    let run = project.run(&["check", "--details"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    assert_contains(&run.stdout, "peak memory 128.0 KiB");
+}
+
+#[test]
+fn a_scenario_that_prints_a_lot_still_finishes() {
+    let project = timed_project("chatty", "chatty.mjs", CHATTY, "60s");
+    let run = project.run(&["check", "--details"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "peak memory 128.0 KiB");
+}
+
+#[test]
+fn the_stderr_of_a_stopped_scenario_is_cut_to_its_end() {
+    let project = timed_project("flood-timeout", "flood.mjs", FLOOD_AND_SPIN, "4s");
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "did not finish within 4s");
+    assert_contains(&run.stderr, "[earlier output dropped]");
+    assert_contains(&run.stderr, "the last words");
+    assert!(run.stderr.len() < 40_000, "{} bytes", run.stderr.len());
+}
+
+#[test]
+fn the_stderr_of_a_failed_scenario_is_cut_to_its_end() {
+    let project = timed_project("flood-fail", "flood.mjs", FLOOD_AND_FAIL, "60s");
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "scenario flood.mjs failed");
+    assert_contains(&run.stderr, "the real reason");
+    assert!(run.stderr.len() < 40_000, "{} bytes", run.stderr.len());
+}
+
+#[test]
+fn the_deadline_comes_from_the_top_level_unless_the_scenario_sets_its_own() {
+    let config = "scenario_timeout = \"1s\"\n\n[[module]]\nname = \"fixture\"\n\
+                  artifact = \"fixture.wasm\"\n\n[[scenario]]\nmodule = \"fixture\"\n\
+                  file = \"spin.mjs\"\n";
+    let project = Project::new("timeout-default", config);
+    project.write("spin.mjs", SPIN);
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "did not finish within 1s");
+}
+
+#[cfg(unix)]
+#[test]
+fn processes_the_scenario_started_are_stopped_with_it() {
+    let project = timed_project("descendant", "spawn.mjs", SPAWN_AND_SPIN, "2s");
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "did not finish within 2s");
+    let pid = project.read("descendant.pid");
+    let alive = |pid: &str| {
+        Command::new("kill")
+            .args(["-0", pid])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while alive(&pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!alive(&pid), "process {pid} outlived the check");
+}
+
+#[test]
+fn a_timed_out_accept_leaves_the_baseline_and_its_history_alone() {
+    let project = Project::new("accept-timeout", &config("", "steady.mjs", 3));
+    project.run(&["accept", "--all", "--reason", "first measurement"]);
+    let baseline = project.read("peakmark.baseline.json");
+    let history = project.read("peakmark.history.jsonl");
+
+    project.write("peakmark.toml", timed_config("spin.mjs", "1s"));
+    project.write("spin.mjs", SPIN);
+    let run = project.run(&["accept", "--all", "--reason", "should not be stored"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "did not finish within 1s");
+    assert_eq!(project.read("peakmark.baseline.json"), baseline);
+    assert_eq!(project.read("peakmark.history.jsonl"), history);
+}

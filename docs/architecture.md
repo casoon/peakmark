@@ -20,7 +20,7 @@ src/
 ├── measure.rs     one module in, one Measured out
 ├── wasm.rs        validation, sections and declared memory, read with wasmparser
 ├── compress.rs    gzip and brotli length
-├── runner.rs      runs a scenario in Node (runner.mjs) and reads the memory it held
+├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory it held
 ├── check.rs       budget and baseline against the measured values: Issue, Level, verdict
 ├── report/        text report (text.rs) and JSON (json.rs)
 ├── metric.rs      Metric and Values: the five gated values

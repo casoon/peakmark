@@ -70,11 +70,11 @@ try {
     afterRun.push(held());
   }
 
-  console.log(
-    "PEAKMARK_RESULT " +
-      JSON.stringify({ afterInstantiate, afterRun, instantiateMs }),
-  );
+  // Exit once the line is written, so a timer or socket the scenario left
+  // behind does not keep this process, and with it the check, waiting.
+  const result = JSON.stringify({ afterInstantiate, afterRun, instantiateMs });
+  process.stdout.write("PEAKMARK_RESULT " + result + "\n", () => process.exit(0));
 } catch (error) {
-  console.error(error?.message ?? String(error));
-  process.exit(1);
+  // Exiting before the write is flushed would lose the message on a full pipe.
+  process.stderr.write((error?.message ?? String(error)) + "\n", () => process.exit(1));
 }

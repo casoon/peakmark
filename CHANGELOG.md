@@ -6,6 +6,12 @@ change the configuration, the baseline format or the output.
 
 ## [Unreleased]
 
+### Added
+
+- **Config:** `scenario_timeout` and a `timeout` per `[[scenario]]` set how long a scenario may
+  run; the default is 60 seconds. Details:
+  [Limits](https://casoon.github.io/peakmark/docs/reference/limits/#scenario-deadline).
+
 ### Changed
 
 - **Size:** a component, or a module that uses a feature outside WebAssembly 3.0, is refused
@@ -16,6 +22,12 @@ change the configuration, the baseline format or the output.
 
 - **Size:** the artifact is validated completely, function bodies included, before anything is
   measured; an invalid module exits with 2 instead of passing a size-only check.
+- **Scenarios:** a scenario that never returns, awaits a promise that never settles or prints
+  without end no longer blocks `check` and `accept` or exhausts memory. It is stopped, with the
+  processes it started on Unix, and the check exits with 2 naming the module, the scenario and the
+  deadline.
+- **Scenarios:** a timer or socket left open by a scenario no longer keeps Node, and the check,
+  waiting after the result is written.
 
 ## [0.1.1] - 2026-11-12
 
