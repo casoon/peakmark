@@ -118,9 +118,9 @@ pub fn parse_duration(text: &str) -> Result<Duration, ParseError> {
 #[must_use]
 pub fn format_duration(duration: Duration) -> String {
     let millis = duration.as_millis();
-    if millis % 60_000 == 0 {
+    if millis.is_multiple_of(60_000) {
         format!("{}m", millis / 60_000)
-    } else if millis % 1000 == 0 {
+    } else if millis.is_multiple_of(1000) {
         format!("{}s", millis / 1000)
     } else {
         format!("{millis}ms")

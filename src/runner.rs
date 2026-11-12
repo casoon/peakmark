@@ -188,10 +188,10 @@ impl Captured {
     }
 
     fn line(&mut self, line: &[u8]) {
-        if self.result.is_none() {
-            if let Some(result) = line.strip_prefix(RESULT_PREFIX) {
-                self.result = Some(result.to_vec());
-            }
+        if self.result.is_none()
+            && let Some(result) = line.strip_prefix(RESULT_PREFIX)
+        {
+            self.result = Some(result.to_vec());
         }
     }
 }
