@@ -90,6 +90,12 @@ impl Item {
         }
     }
 
+    /// The kind and the type as a sentence shows them: `func (i32) -> i32`.
+    #[must_use]
+    pub fn kind_and_type(&self) -> String {
+        format!("{} {}", self.kind, self.ty)
+    }
+
     fn identity(&self) -> Identity {
         (self.module.clone(), self.name.clone(), self.kind)
     }

@@ -140,6 +140,13 @@ pub enum Error {
         /// The configuration file.
         config: PathBuf,
     },
+    /// `accept` was asked to store a module that breaks its policy.
+    PolicyViolated {
+        /// The module name.
+        module: String,
+        /// The configuration file.
+        config: PathBuf,
+    },
 }
 
 /// A command line that does not parse.
@@ -278,6 +285,11 @@ impl fmt::Display for Error {
                 "`{module}` is over its budget; raise the budget in {} before accepting",
                 config.display()
             ),
+            Self::PolicyViolated { module, config } => write!(
+                f,
+                "`{module}` breaks its policy; accepting does not waive it, so fix the module or change [module.policy] in {}",
+                config.display()
+            ),
         }
     }
 }
@@ -305,7 +317,8 @@ impl std::error::Error for Error {
             | Self::ScenarioTimeout { .. }
             | Self::ScenarioNoResult { .. }
             | Self::UnknownModule { .. }
-            | Self::OverBudget { .. } => None,
+            | Self::OverBudget { .. }
+            | Self::PolicyViolated { .. } => None,
         }
     }
 }

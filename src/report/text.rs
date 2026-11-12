@@ -8,6 +8,7 @@ use crate::inventory::{
     TableType, TargetFeatureMode,
 };
 use crate::runner::{ScenarioResult, Unobserved};
+use crate::snapshot::{Drift, Part};
 use crate::units::format_binary;
 
 /// The report `check` prints. With `details`, it also lists every measured
@@ -25,12 +26,18 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
     // of `ModuleResult`, which the `fn` pointer type leaves open.
     #[allow(clippy::redundant_closure_for_method_calls)]
     let over = names(|result| result.over_budget());
-    let grown = names(|result| !result.over_budget() && result.grown());
-    let drifted = names(|result| !result.over_budget() && !result.grown() && result.drifted());
+    let violated = names(|result| !result.over_budget() && result.violated());
+    let failed = |result: &ModuleResult| result.over_budget() || result.violated();
+    let grown = names(|result| !result.over_budget() && !result.violated() && result.grown());
+    let drifted = names(|result| {
+        !result.over_budget() && !result.violated() && !result.grown() && result.drifted()
+    });
     let unset = names(|result| result.baseline.is_none());
 
     let title = if !over.is_empty() {
         format!("over budget: {}", over.join(", "))
+    } else if !violated.is_empty() {
+        format!("policy broken: {}", violated.join(", "))
     } else if !grown.is_empty() {
         format!("grown past the baseline: {}", grown.join(", "))
     } else if !drifted.is_empty() {
@@ -54,6 +61,11 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
     let mut report = Report::new(format!("peakmark check: {title}"), verdict(results))
         .add_metric(ReportMetric::new("Modules", results.len().to_string()))
         .add_metric(count("Over budget", over.len(), Tone::Error))
+        .add_metric(count(
+            "Policy broken",
+            results.iter().filter(|result| result.violated()).count(),
+            Tone::Error,
+        ))
         .add_metric(count("Grown", grown.len(), Tone::Warning))
         .add_metric(count(
             "Baseline drift",
@@ -69,23 +81,8 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
         }
     }
 
-    for result in results {
-        let mut group = FindingGroup::new(&result.module.name);
-        for issue in &result.issues {
-            group = group.add_finding(finding(issue));
-        }
-        for change in &result.changes {
-            group = group.add_finding(change_finding(change));
-        }
-        if result.baseline.is_none() {
-            group = group.add_finding(
-                Finding::new(Tone::Warning, "No baseline accepted yet")
-                    .with_rule_id("baseline/missing"),
-            );
-        }
-        if !result.issues.is_empty() || !result.changes.is_empty() || result.baseline.is_none() {
-            report = report.add_group(group);
-        }
+    for group in results.iter().filter_map(module_group) {
+        report = report.add_group(group);
     }
 
     if !over.is_empty() {
@@ -93,11 +90,15 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
             "Shrink the module, or raise its budget in the configuration on purpose",
         ));
     }
+    if !violated.is_empty() {
+        report = report.add_next_step(NextStep::new(
+            "Fix the module, or change [module.policy] in the configuration on purpose; accepting the baseline does not waive it",
+        ));
+    }
     let to_accept: Vec<&str> = results
         .iter()
         .filter(|result| {
-            !result.over_budget()
-                && (result.grown() || result.drifted() || result.baseline.is_none())
+            !failed(result) && (result.grown() || result.drifted() || result.baseline.is_none())
         })
         .map(|result| result.module.name.as_str())
         .collect();
@@ -110,6 +111,35 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
         );
     }
     report
+}
+
+/// The findings of one module; `None` if there are none.
+fn module_group(result: &ModuleResult) -> Option<FindingGroup> {
+    let mut group = FindingGroup::new(&result.module.name);
+    for issue in &result.issues {
+        group = group.add_finding(finding(issue));
+    }
+    for violation in &result.violations {
+        group = group.add_finding(
+            Finding::new(Tone::Error, violation.message())
+                .with_rule_id(violation.rule())
+                .with_remedy(violation.action()),
+        );
+    }
+    for change in &result.changes {
+        group = group.add_finding(change_finding(change));
+    }
+    if result.baseline.is_none() {
+        group = group.add_finding(
+            Finding::new(Tone::Warning, "No baseline accepted yet")
+                .with_rule_id("baseline/missing"),
+        );
+    }
+    let any = !result.issues.is_empty()
+        || !result.violations.is_empty()
+        || !result.changes.is_empty()
+        || result.baseline.is_none();
+    any.then_some(group)
 }
 
 /// The `--details` groups: the measured values, then the inventory per module.
@@ -512,12 +542,53 @@ fn change_finding(change: &Change) -> Finding {
         Change::RuntimeChanged { was, now } => {
             format!("Node {now}, accepted with {was}; values stay comparable")
         }
+        Change::Interface(drift) => drift_message(drift),
+        Change::InventoryNotAccepted => {
+            "The baseline has no inventory yet, so imports, exports and features are not compared"
+                .to_string()
+        }
     };
     let tone = match change.level() {
         Level::Note => Tone::Info,
         _ => Tone::Warning,
     };
     Finding::new(tone, message).with_rule_id(change.rule())
+}
+
+fn drift_message(drift: &Drift) -> String {
+    match drift {
+        Drift::Added { part, item } => {
+            let more = match part {
+                Part::Import => "; the host must provide one more binding",
+                _ => "",
+            };
+            format!(
+                "{} {} {} was added{more}",
+                part.label(),
+                item.label(),
+                item.kind_and_type()
+            )
+        }
+        Drift::Removed { part, item } => format!(
+            "{} {} {} was removed",
+            part.label(),
+            item.label(),
+            item.kind_and_type()
+        ),
+        Drift::Changed { part, item, was } => format!(
+            "{} {} changed: {} {was} was, {} now",
+            part.label(),
+            item.label(),
+            item.kind,
+            item.ty
+        ),
+        Drift::FeatureAdded(feature) => {
+            format!("The binary now needs {feature}, which the accepted inventory did not")
+        }
+        Drift::FeatureRemoved(feature) => {
+            format!("The binary no longer needs {feature}")
+        }
+    }
 }
 
 fn capitalize(text: &str) -> String {

@@ -64,6 +64,12 @@ pub(super) fn accept(
                 config: config_path.to_path_buf(),
             });
         }
+        if result.violated() {
+            return Err(Error::PolicyViolated {
+                module: module.name.clone(),
+                config: config_path.to_path_buf(),
+            });
+        }
         accepted.push((
             module.name.clone(),
             baseline::Entry::from_measured(&result.measured, reason),

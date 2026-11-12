@@ -3,6 +3,8 @@ use serde_json::json as object;
 
 use crate::check::{Change, Level, ModuleResult, Reason, verdict};
 use crate::metric::Values;
+use crate::policy::Violation;
+use crate::snapshot::Drift;
 
 /// The machine-readable result of a check, the document `--json` prints.
 #[must_use]
@@ -40,12 +42,14 @@ pub fn json(results: &[ModuleResult]) -> serde_json::Value {
                 "baseline": result.baseline.map(|entry| values(&entry.values)),
                 "baseline_scenarios": result.baseline.map(|entry| &entry.scenarios),
                 "baseline_contract": result.baseline.and_then(|entry| entry.contract.as_ref()),
+                "baseline_inventory": result.baseline.and_then(|entry| entry.inventory.as_ref()),
                 "initial_memory": result.measured.initial_memory,
                 "sections": result.measured.sections,
                 "inventory": result.measured.inventory,
                 "scenarios": result.measured.scenarios,
                 "issues": issues,
                 "changes": result.changes.iter().map(change).collect::<Vec<_>>(),
+                "violations": result.violations.iter().map(violation).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -78,8 +82,42 @@ fn change(change: &Change) -> serde_json::Value {
             object!({ "scenario": scenario, "unobserved": what })
         }
         Change::RuntimeChanged { was, now } => object!({ "was": was, "now": now }),
+        Change::Interface(drift) => drift_detail(drift),
+        Change::InventoryNotAccepted => object!({}),
     };
     object!({ "rule": change.rule(), "level": level, "detail": detail })
+}
+
+fn violation(violation: &Violation) -> serde_json::Value {
+    object!({
+        "rule": violation.rule(),
+        "level": "error",
+        "message": violation.message(),
+        "action": violation.action(),
+        "detail": violation,
+    })
+}
+
+/// The evidence of an inventory difference: what it is, the identity of the
+/// declaration, and its accepted (`was`) and current (`now`) type.
+fn drift_detail(drift: &Drift) -> serde_json::Value {
+    match drift {
+        Drift::Added { part, item } => object!({
+            "part": part.key(), "module": item.module, "name": item.name,
+            "kind": item.kind, "now": item.ty,
+        }),
+        Drift::Removed { part, item } => object!({
+            "part": part.key(), "module": item.module, "name": item.name,
+            "kind": item.kind, "was": item.ty,
+        }),
+        Drift::Changed { part, item, was } => object!({
+            "part": part.key(), "module": item.module, "name": item.name,
+            "kind": item.kind, "was": was, "now": item.ty,
+        }),
+        Drift::FeatureAdded(feature) | Drift::FeatureRemoved(feature) => {
+            object!({ "feature": feature })
+        }
+    }
 }
 
 #[cfg(test)]

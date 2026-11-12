@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::error::Error;
 use crate::metric::Values;
+use crate::policy::Policy;
 use crate::units::{ParseError, parse_bytes, parse_duration, parse_percent};
 
 /// A parsed `peakmark.toml`.
@@ -32,6 +33,8 @@ pub struct Module {
     pub glue: Option<PathBuf>,
     /// What the module may reach; a missing value is not gated.
     pub budget: Values,
+    /// The compatibility rules that fail the check when broken; empty gates nothing.
+    pub policy: Policy,
     /// The scenarios that measure memory.
     pub scenarios: Vec<Scenario>,
 }
@@ -70,6 +73,8 @@ struct RawModule {
     glue: Option<PathBuf>,
     #[serde(default)]
     budget: RawBudget,
+    #[serde(default)]
+    policy: Policy,
 }
 
 #[derive(Deserialize, Default)]
@@ -235,6 +240,7 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, ConfigError> {
             artifact: module.artifact,
             glue: module.glue,
             budget,
+            policy: module.policy,
             scenarios: Vec::new(),
         });
     }
@@ -458,5 +464,39 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown module `b`"), "{error}");
+    }
+    #[test]
+    fn reads_a_policy_and_defaults_to_none() {
+        let config = parse(
+            r#"
+            [[module]]
+            name = "engine"
+            artifact = "engine.wasm"
+
+            [module.policy]
+            require_exports = [{ name = "add", signature = "(i32, i32) -> i32" }]
+            allow_imports = [{ module = "env", name = "log" }]
+            allow_features = ["bulk_memory"]
+
+            [[module]]
+            name = "plain"
+            artifact = "plain.wasm"
+            "#,
+        )
+        .unwrap();
+
+        let policy = &config.modules[0].policy;
+        assert_eq!(policy.require_exports[0].name, "add");
+        assert_eq!(policy.allow_imports.as_ref().unwrap().len(), 1);
+        assert_eq!(policy.allow_features.as_ref().unwrap().len(), 1);
+        assert!(config.modules[1].policy.is_empty());
+    }
+
+    #[test]
+    fn refuses_a_policy_with_an_unknown_key_or_feature() {
+        let base = "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n[module.policy]\n";
+        for line in ["allow_feature = []", "allow_features = ['telepathy']"] {
+            assert!(toml::from_str::<RawConfig>(&format!("{base}{line}")).is_err());
+        }
     }
 }

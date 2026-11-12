@@ -40,6 +40,7 @@ pub mod error;
 pub mod inventory;
 pub mod measure;
 pub mod metric;
+pub mod policy;
 pub mod report;
 pub mod runner;
 pub mod snapshot;

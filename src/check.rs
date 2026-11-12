@@ -9,7 +9,9 @@ use crate::compress::SETTINGS;
 use crate::config::Module;
 use crate::measure::Measured;
 use crate::metric::Metric;
+use crate::policy::{Violation, evaluate as evaluate_policy};
 use crate::runner::{RUNNER_SCHEMA, Unobserved, WARMUP_RUNS};
+use crate::snapshot::{Drift, Snapshot, diff};
 
 /// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +59,8 @@ pub enum Reason {
 }
 
 /// Where the baseline and the measurement no longer line up, apart from a
-/// value that grew. Every change but a [`Change::RuntimeChanged`] stays a
+/// value that grew. Every change but a [`Change::RuntimeChanged`], a
+/// [`Change::Unobserved`] and a [`Change::InventoryNotAccepted`] stays a
 /// warning until the baseline is accepted again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
@@ -99,6 +102,11 @@ pub enum Change {
         /// The version now.
         now: String,
     },
+    /// The interface or the required features differ from the accepted
+    /// inventory. A statement about the binary, not a gate.
+    Interface(Drift),
+    /// The baseline entry predates the stored inventory, so nothing of it is compared.
+    InventoryNotAccepted,
 }
 
 impl Change {
@@ -112,6 +120,8 @@ impl Change {
             Change::Incomparable { .. } => "baseline/incomparable",
             Change::Unobserved { .. } => "memory/coverage",
             Change::RuntimeChanged { .. } => "baseline/runtime",
+            Change::Interface(drift) => drift.rule(),
+            Change::InventoryNotAccepted => "baseline/inventory-missing",
         }
     }
 
@@ -119,7 +129,9 @@ impl Change {
     #[must_use]
     pub fn level(&self) -> Level {
         match self {
-            Change::Unobserved { .. } | Change::RuntimeChanged { .. } => Level::Note,
+            Change::Unobserved { .. }
+            | Change::RuntimeChanged { .. }
+            | Change::InventoryNotAccepted => Level::Note,
             _ => Level::Warning,
         }
     }
@@ -137,6 +149,9 @@ pub struct ModuleResult<'a> {
     pub issues: Vec<Issue>,
     /// Where the baseline and the measurement no longer line up.
     pub changes: Vec<Change>,
+    /// The rules of the module's policy that the inventory breaks. They fail
+    /// the check, and no baseline waives them.
+    pub violations: Vec<Violation>,
 }
 
 impl ModuleResult<'_> {
@@ -144,6 +159,12 @@ impl ModuleResult<'_> {
     #[must_use]
     pub fn over_budget(&self) -> bool {
         self.issues.iter().any(|issue| issue.level == Level::Error)
+    }
+
+    /// Whether the module breaks a rule of its policy.
+    #[must_use]
+    pub fn violated(&self) -> bool {
+        !self.violations.is_empty()
     }
 
     /// Whether any metric is past its baseline by more than the tolerance.
@@ -210,12 +231,14 @@ pub fn evaluate<'a>(
         compare_scenarios(entry, &measured, tolerance, &mut issues, &mut changes);
         compare_module(entry, &measured, &mut changes);
     }
+    let violations = evaluate_policy(&module.policy, &measured.inventory);
     ModuleResult {
         module,
         measured,
         baseline,
         issues,
         changes,
+        violations,
     }
 }
 
@@ -272,6 +295,14 @@ fn compare_module(entry: &Entry, measured: &Measured, changes: &mut Vec<Change>)
             was: was.clone(),
             now: now.clone(),
         });
+    }
+    match &entry.inventory {
+        Some(accepted) => changes.extend(
+            diff(accepted, &Snapshot::from_inventory(&measured.inventory))
+                .into_iter()
+                .map(Change::Interface),
+        ),
+        None => changes.push(Change::InventoryNotAccepted),
     }
 }
 
@@ -357,11 +388,15 @@ fn judge(
     ((value - baseline) as f64 > baseline as f64 * tolerance).then_some((Level::Warning, baseline))
 }
 
-/// The verdict over all modules: failed if any is over budget, a warning if
+/// The verdict over all modules: failed if any is over budget or breaks its
+/// policy, a warning if
 /// any grew, has no baseline yet or no longer lines up with its baseline.
 #[must_use]
 pub fn verdict(results: &[ModuleResult]) -> Verdict {
-    if results.iter().any(ModuleResult::over_budget) {
+    if results
+        .iter()
+        .any(|result| result.over_budget() || result.violated())
+    {
         Verdict::Failed
     } else if results
         .iter()
@@ -380,6 +415,7 @@ mod tests {
     use super::*;
     use crate::metric::Values;
     use crate::runner::{Coverage, ScenarioResult};
+    use crate::snapshot::Drift;
     use crate::wasm::Sections;
 
     #[test]
@@ -461,6 +497,7 @@ mod tests {
             artifact: PathBuf::from("engine.wasm"),
             glue: None,
             budget: Values::default(),
+            policy: crate::policy::Policy::default(),
             scenarios: Vec::new(),
         }
     }
@@ -683,5 +720,92 @@ mod tests {
                 },
             ]
         );
+    }
+    fn with_inventory(wat: &str) -> Measured {
+        let mut m = measured(Vec::new());
+        m.inventory =
+            crate::inventory::Inventory::from_bytes(&wat::parse_str(wat).unwrap()).unwrap();
+        m
+    }
+
+    const ACCEPTED: &str = r#"(module
+        (import "env" "log" (func (param i32)))
+        (memory (export "memory") 1 4)
+        (func (export "add") (param i32 i32) (result i32) local.get 0))"#;
+
+    #[test]
+    fn a_changed_export_signature_and_a_new_requirement_carry_before_and_after() {
+        let module = module();
+        let entry = Entry::from_measured(&with_inventory(ACCEPTED), "test");
+        let now = with_inventory(
+            r#"(module
+            (import "env" "log" (func (param i32)))
+            (memory (export "memory") 1 4 shared)
+            (func (export "add") (param i64 i64) (result i64) local.get 0))"#,
+        );
+
+        let result = evaluate(&module, now, Some(&entry), 0.01);
+
+        let rules: Vec<_> = result.changes.iter().map(Change::rule).collect();
+        assert_eq!(
+            rules,
+            [
+                "baseline/interface-changed",
+                "baseline/interface-changed",
+                "baseline/feature-added"
+            ]
+        );
+        assert!(matches!(
+            &result.changes[0],
+            Change::Interface(Drift::Changed { item, was, .. })
+                if item.name == "add" && was == "(i32, i32) -> i32" && item.ty == "(i64, i64) -> i64"
+        ));
+        assert!(result.drifted() && !result.violated());
+        assert_eq!(verdict(&[result]), Verdict::Warning);
+    }
+
+    #[test]
+    fn an_equivalent_reordering_is_no_change() {
+        let module = module();
+        let entry = Entry::from_measured(&with_inventory(ACCEPTED), "test");
+        let now = with_inventory(
+            r#"(module
+            (import "env" "log" (func (param i32)))
+            (func (export "add") (param i32 i32) (result i32) local.get 0)
+            (memory (export "memory") 1 4))"#,
+        );
+
+        let result = evaluate(&module, now, Some(&entry), 0.01);
+
+        assert!(result.changes.is_empty(), "{:?}", result.changes);
+        assert_eq!(verdict(&[result]), Verdict::Passed);
+    }
+
+    #[test]
+    fn an_entry_without_an_inventory_notes_it_and_compares_nothing() {
+        let module = module();
+        let mut entry = Entry::from_measured(&with_inventory(ACCEPTED), "test");
+        entry.inventory = None;
+
+        let result = evaluate(&module, with_inventory("(module)"), Some(&entry), 0.01);
+
+        assert_eq!(result.changes, [Change::InventoryNotAccepted]);
+        assert_eq!(result.changes[0].level(), Level::Note);
+        assert_eq!(verdict(&[result]), Verdict::Passed);
+    }
+
+    #[test]
+    fn a_policy_violation_fails_the_check_whatever_the_baseline_accepted() {
+        let mut module = module();
+        module.policy.allow_imports = Some(Vec::new());
+        let now = with_inventory(ACCEPTED);
+        let entry = Entry::from_measured(&now, "accepted with the import");
+
+        let result = evaluate(&module, now, Some(&entry), 0.01);
+
+        assert_eq!(result.changes, []);
+        assert!(result.violated() && !result.over_budget());
+        assert_eq!(result.violations[0].rule(), "policy/import-not-allowed");
+        assert_eq!(verdict(&[result]), Verdict::Failed);
     }
 }
