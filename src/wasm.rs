@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use crate::inventory::{self, Inventory};
 use wasmparser::{
     BinaryReaderError, Encoding, FuncValidatorAllocations, Parser, Payload, TypeRef, ValidPayload,
     Validator, WasmFeatures,
@@ -51,7 +52,7 @@ pub struct Sections {
 }
 
 /// What [`inspect`] reads from a module.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct Inspection {
     /// Section sizes.
     pub sections: Sections,
@@ -59,10 +60,12 @@ pub struct Inspection {
     pub initial_memory: Option<u64>,
     /// How many memories the module declares, imported ones included.
     pub memory_count: u32,
+    /// The static inventory of the module.
+    pub inventory: Inventory,
 }
 
-/// Validates the module completely, then reads its section sizes and declared
-/// memory.
+/// Validates the module completely, then reads its section sizes, declared
+/// memory and [`Inventory`].
 ///
 /// # Errors
 ///
@@ -70,7 +73,10 @@ pub struct Inspection {
 /// supported set, or is a component.
 pub fn inspect(bytes: &[u8]) -> Result<Inspection, InspectError> {
     validate(bytes)?;
-    let mut inspection = Inspection::default();
+    let mut inspection = Inspection {
+        inventory: inventory::read(bytes).map_err(InspectError::Invalid)?,
+        ..Inspection::default()
+    };
     for payload in Parser::new(0).parse_all(bytes) {
         match payload.map_err(InspectError::Invalid)? {
             Payload::MemorySection(reader) => {

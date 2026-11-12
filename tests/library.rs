@@ -152,3 +152,58 @@ fn a_component_and_an_unsupported_feature_are_told_apart_from_an_invalid_module(
     let error = measure(&config, &config.modules[0]).err().unwrap();
     assert!(matches!(error, Error::UnsupportedFeature { .. }), "{error}");
 }
+
+#[test]
+fn the_inventory_is_read_from_the_bytes_alone() {
+    use peakmark::inventory::{Feature, Inventory, Names};
+
+    let bytes = wat::parse_str(
+        r#"(module $engine
+            (import "env" "memory" (memory 1))
+            (import "env" "log" (func (param i32)))
+            (memory (export "bounded") 1 4)
+            (memory 2 2 shared)
+            (table (export "table") 2 funcref)
+            (func (export "run") (param i32) (result i32) local.get 0)
+            (func v128.const i64x2 0 0 drop))"#,
+    )
+    .unwrap();
+
+    let inventory = Inventory::from_bytes(&bytes).unwrap();
+
+    assert_eq!(inventory.memories.len(), 3);
+    assert!(inventory.memories[0].imported_from.is_some());
+    assert_eq!(inventory.memories[1].ty.maximum, Some(4));
+    assert!(inventory.memories[2].ty.shared);
+    assert_eq!(inventory.tables[0].exported_as, ["table"]);
+    assert_eq!(inventory.exports.len(), 3);
+    assert!(inventory.feature(Feature::Simd).is_some());
+    assert!(inventory.feature(Feature::SharedMemory).is_some());
+    assert!(inventory.feature(Feature::MultiMemory).is_some());
+    assert!(matches!(inventory.names, Names::Present { .. }));
+    assert_eq!(inventory.accounted_bytes(), bytes.len() as u64);
+}
+
+#[test]
+fn measuring_a_module_carries_its_inventory() {
+    let dir = project("lib-inventory", MODULE, 1);
+    let config = config::load(&dir.join("peakmark.toml")).unwrap();
+
+    let measured = measure(&config, &config.modules[0]).unwrap();
+
+    assert_eq!(measured.inventory.memories[0].ty.minimum, 2);
+    assert_eq!(measured.inventory.counts.data_segments, 1);
+}
+
+#[test]
+fn a_feature_outside_the_supported_set_fails_instead_of_being_left_out() {
+    use peakmark::inventory::Inventory;
+    use peakmark::wasm::InspectError;
+
+    let bytes = wat::parse_str("(module (memory 1 (pagesize 1)))").unwrap();
+
+    assert!(matches!(
+        Inventory::from_bytes(&bytes),
+        Err(InspectError::UnsupportedFeature(_))
+    ));
+}

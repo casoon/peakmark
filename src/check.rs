@@ -449,6 +449,7 @@ mod tests {
             },
             sections: Sections::default(),
             initial_memory: None,
+            inventory: crate::inventory::Inventory::default(),
             scenarios,
             artifact_sha256: "artifact".to_string(),
         }

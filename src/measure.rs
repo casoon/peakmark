@@ -7,6 +7,7 @@ use crate::compress::{brotli_len, gzip_len};
 use crate::config::{Config, Module};
 use crate::digest::sha256;
 use crate::error::Error;
+use crate::inventory::Inventory;
 use crate::metric::{Metric, Values};
 use crate::runner::{ScenarioResult, run_scenario};
 use crate::wasm::{InspectError, Sections, inspect};
@@ -19,6 +20,8 @@ pub struct Measured {
     pub sections: Sections,
     /// What the module's memory section asks for; `None` if it has none.
     pub initial_memory: Option<u64>,
+    /// The static inventory of the artifact: interface, features, sections.
+    pub inventory: Inventory,
     /// One result per configured scenario.
     pub scenarios: Vec<ScenarioResult>,
     /// SHA-256 of the artifact. It changes with every build and identifies
@@ -78,6 +81,7 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         values,
         sections: inspection.sections,
         initial_memory: inspection.initial_memory,
+        inventory: inspection.inventory,
         scenarios,
         artifact_sha256: sha256(&bytes),
     })

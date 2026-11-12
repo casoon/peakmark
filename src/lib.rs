@@ -37,6 +37,7 @@ pub mod config;
 mod date;
 mod digest;
 pub mod error;
+pub mod inventory;
 pub mod measure;
 pub mod metric;
 pub mod report;

@@ -42,6 +42,7 @@ pub fn json(results: &[ModuleResult]) -> serde_json::Value {
                 "baseline_contract": result.baseline.and_then(|entry| entry.contract.as_ref()),
                 "initial_memory": result.measured.initial_memory,
                 "sections": result.measured.sections,
+                "inventory": result.measured.inventory,
                 "scenarios": result.measured.scenarios,
                 "issues": issues,
                 "changes": result.changes.iter().map(change).collect::<Vec<_>>(),
