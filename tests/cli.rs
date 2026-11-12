@@ -542,3 +542,204 @@ fn a_timed_out_accept_leaves_the_baseline_and_its_history_alone() {
     assert_eq!(project.read("peakmark.baseline.json"), baseline);
     assert_eq!(project.read("peakmark.history.jsonl"), history);
 }
+
+/// Grows to eight pages once and holds that.
+const BIG: &str = "let grown = false;
+export default (module) => {
+  if (!grown) module.grow(7);
+  grown = true;
+};
+";
+
+/// Grows by the pages `pages.txt` names, once. Changing the file changes the
+/// behaviour and leaves the script, and so its fingerprint, as it is.
+const FOLLOWS_FILE: &str = "import { readFileSync } from 'node:fs';
+let grown = false;
+export default (module) => {
+  const pages = Number(readFileSync(new URL('./pages.txt', import.meta.url), 'utf8'));
+  if (!grown && pages > 0) module.grow(pages);
+  grown = true;
+};
+";
+
+fn two_scenarios(budget: &str, repeat: u32) -> String {
+    format!(
+        "{}\n[[scenario]]\nmodule = \"fixture\"\nfile = \"follows.mjs\"\nrepeat = {repeat}\n",
+        config(budget, "big.mjs", 3)
+    )
+}
+
+fn baseline_json(project: &Project) -> serde_json::Value {
+    serde_json::from_str(&project.read("peakmark.baseline.json")).unwrap()
+}
+
+#[test]
+fn growth_of_one_scenario_is_found_below_the_maximum_of_another() {
+    let project = Project::new("per-scenario", &two_scenarios("", 3));
+    project.write("big.mjs", BIG);
+    project.write("follows.mjs", FOLLOWS_FILE);
+    project.write("pages.txt", "0");
+    project.run(&["accept", "--all", "--reason", "first"]);
+    let accepted = baseline_json(&project);
+    assert_eq!(accepted["version"], 2);
+    let fixture = &accepted["modules"]["fixture"];
+    assert_eq!(fixture["scenarios"]["big.mjs"]["peak_memory"], 8 * 65_536);
+    assert_eq!(fixture["scenarios"]["follows.mjs"]["peak_memory"], 65_536);
+    assert_eq!(fixture["values"]["peak_memory"], 8 * 65_536);
+
+    project.write("pages.txt", "3");
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "peakmark check: grown past the baseline: fixture",
+    );
+    assert_contains(
+        &run.stdout,
+        "Peak memory 256.0 KiB, +192.0 KiB over the baseline [mem/peak]",
+    );
+    assert_contains(&run.stdout, "follows.mjs");
+    let json = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(result["verdict"], "warning");
+    // The module maximum, still eight pages, is what a budget would judge.
+    assert_eq!(result["modules"][0]["values"]["peak_memory"], 8 * 65_536);
+    assert_eq!(result["modules"][0]["issues"][0]["scenario"], "follows.mjs");
+}
+
+#[test]
+fn removing_scenarios_and_budgets_is_reported_until_it_is_accepted() {
+    let project = Project::new(
+        "removed-coverage",
+        &config("peak_memory = \"512 KiB\"", "steady.mjs", 3),
+    );
+    project.run(&["accept", "--all", "--reason", "first"]);
+
+    project.write(
+        "peakmark.toml",
+        "[[module]]\nname = \"fixture\"\nartifact = \"fixture.wasm\"\n",
+    );
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "peakmark check: baseline no longer matches: fixture",
+    );
+    assert_contains(&run.stdout, "[baseline/scenario-removed]");
+    assert_contains(&run.stdout, "Scenario steady.mjs is in the baseline");
+    assert_contains(
+        &run.stdout,
+        "Peak memory was accepted and is not measured now [baseline/metric-missing]",
+    );
+    assert_contains(&run.stdout, "peakmark accept fixture --reason");
+    let json = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(result["verdict"], "warning");
+    let rules: Vec<_> = result["modules"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|change| change["rule"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            "baseline/scenario-removed",
+            "baseline/metric-missing",
+            "baseline/metric-missing"
+        ]
+    );
+
+    let accept = project.run(&["accept", "--all", "--reason", "dropped the memory scenario"]);
+    assert_eq!(accept.code, 0, "{}", accept.stderr);
+    assert!(
+        baseline_json(&project)["modules"]["fixture"]
+            .get("scenarios")
+            .is_none()
+    );
+    let after = project.run(&["check"]);
+    assert_contains(
+        &after.stdout,
+        "peakmark check: 1 module within budget and baseline",
+    );
+}
+
+#[test]
+fn a_changed_repeat_is_not_compared_and_a_new_scenario_has_no_values() {
+    let project = Project::new("repeat", &config("", "leak.mjs", 3));
+    project.run(&["accept", "--all", "--reason", "first"]);
+
+    project.write("peakmark.toml", config("", "leak.mjs", 6));
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "Scenario leak.mjs is not compared: it runs 6 times, accepted with 3 [baseline/incomparable]",
+    );
+    assert!(!run.stdout.contains("[mem/"), "{}", run.stdout);
+
+    project.write("peakmark.toml", two_scenarios("", 3));
+    project.write("big.mjs", BIG);
+    project.write("follows.mjs", FOLLOWS_FILE);
+    project.write("pages.txt", "0");
+    let added = project.run(&["check"]);
+    assert_contains(&added.stdout, "[baseline/scenario-new]");
+}
+
+#[test]
+fn a_format_1_baseline_is_read_and_migrated_by_accept_without_touching_other_modules() {
+    let project = Project::new("format-1", &config("", "steady.mjs", 3));
+    let entry = |raw: u64| {
+        format!(
+            r#"{{"accepted":"2026-01-01","reason":"old","values":{{"raw":{raw},"peak_memory":{}}}}}"#,
+            4 * 65_536
+        )
+    };
+    let raw = std::fs::metadata(project.dir.join("fixture.wasm"))
+        .unwrap()
+        .len();
+    project.write(
+        "peakmark.baseline.json",
+        format!(
+            r#"{{"version":1,"modules":{{"fixture":{},"other":{}}}}}"#,
+            entry(raw),
+            entry(7)
+        ),
+    );
+
+    let run = project.run(&["check"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "Scenario steady.mjs has no accepted values yet",
+    );
+
+    project.run(&["accept", "fixture", "--reason", "migrate"]);
+    let saved = baseline_json(&project);
+    assert_eq!(saved["version"], 2);
+    assert!(saved["modules"]["fixture"]["scenarios"]["steady.mjs"].is_object());
+    assert_eq!(saved["modules"]["other"]["values"]["raw"], 7);
+    assert!(saved["modules"]["other"].get("contract").is_none());
+    let after = project.run(&["check"]);
+    assert_contains(
+        &after.stdout,
+        "peakmark check: 1 module within budget and baseline",
+    );
+}
+
+#[test]
+fn a_baseline_format_this_peakmark_does_not_read_stops_the_check() {
+    let project = Project::new("format-9", &config("", "steady.mjs", 3));
+    let text = r#"{"version":9,"modules":{}}"#;
+    project.write("peakmark.baseline.json", text);
+
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "has format version 9");
+    assert_contains(&run.stderr, "update peakmark");
+    assert_eq!(project.read("peakmark.baseline.json"), text);
+}
