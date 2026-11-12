@@ -53,6 +53,8 @@ pub fn json(results: &[ModuleResult]) -> serde_json::Value {
                 "issues": issues,
                 "changes": result.changes.iter().map(change).collect::<Vec<_>>(),
                 "violations": result.violations.iter().map(violation).collect::<Vec<_>>(),
+                "explanations": result.explanations.listed,
+                "explanations_omitted": result.explanations.omitted,
             })
         })
         .collect();

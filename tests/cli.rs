@@ -1536,3 +1536,353 @@ fn a_stripped_module_is_explained_by_export_and_local_id_never_by_a_guessed_name
         "reached from export \"run\" -> func[1] -> func[2]",
     );
 }
+
+// Automatic explanations: ranked, evidence-backed, never a guess and never a verdict.
+
+/// A project like `accepted_sizes`, with a tolerance narrow enough that the
+/// variants below are growth.
+fn accepted_tight(name: &str, wat: &str) -> Project {
+    let project = Project::new(name, &format!("tolerance = \"1%\"\n{SIZE_ONLY}"));
+    project.write("fixture.wasm", wat::parse_str(wat).unwrap());
+    let accept = project.run(&["accept", "--all", "--reason", "first"]);
+    assert_eq!(accept.code, 0, "{}", accept.stderr);
+    project
+}
+
+fn explanations(run: &Run) -> Vec<serde_json::Value> {
+    let document: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    document["modules"][0]["explanations"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+fn rules(explained: &[serde_json::Value]) -> Vec<&str> {
+    explained
+        .iter()
+        .map(|e| e["rule"].as_str().unwrap())
+        .collect()
+}
+
+fn evidence_of<'a>(explanation: &'a serde_json::Value, what: &str) -> &'a serde_json::Value {
+    explanation["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["what"] == what)
+        .unwrap_or_else(|| panic!("no evidence `{what}` in {explanation}"))
+}
+
+#[test]
+fn the_first_run_explains_the_composition_and_claims_no_growth() {
+    let project = Project::new("explain-first", SIZE_ONLY);
+    project.write(
+        "fixture.wasm",
+        wat::parse_str(sized_module(60, "ab", "")).unwrap(),
+    );
+
+    let json = project.run(&["check", "--json"]);
+    let listed = explanations(&json);
+    assert_eq!(rules(&listed), ["explain/composition"]);
+    assert_eq!(listed[0]["status"], "exact");
+    assert_eq!(listed[0]["evidence"][0]["was"], serde_json::Value::Null);
+    assert_eq!(listed[0]["evidence"][0]["what"], "code bytes");
+    assert_contains(listed[0]["reached"]["root"].as_str().unwrap(), "export");
+
+    let text = project.run(&["check"]);
+    assert_contains(&text.stdout, "Explanations: fixture");
+    assert_contains(&text.stdout, "No baseline yet, so no growth is claimed");
+    assert_contains(&text.stdout, "[explain/composition]");
+    assert_contains(&text.stdout, "Next: ");
+    assert_contains(&text.stdout, "Coverage: ");
+    assert!(!text.stdout.contains("grew"));
+}
+
+#[test]
+fn a_grown_debug_section_is_named_with_before_and_after_and_a_distinct_action() {
+    let project = accepted_tight("explain-debug", &sized_module(10, "ab", ""));
+    change_to(
+        &project,
+        &sized_module(
+            10,
+            "ab",
+            &format!(r#"(@custom ".debug_info" "{}")"#, "0".repeat(500)),
+        ),
+    );
+    let before = std::fs::read(project.dir.join("fixture.wasm")).unwrap();
+
+    let json = project.run(&["check", "--json"]);
+    let listed = explanations(&json);
+    assert_eq!(rules(&listed), ["explain/debug-growth"]);
+    assert_eq!(listed[0]["status"], "exact");
+    let part = evidence_of(&listed[0], "debug bytes");
+    assert_eq!(part["was"], 0);
+    assert!(part["now"].as_u64().unwrap() >= 500);
+    assert!(
+        evidence_of(&listed[0], "custom section .debug_info")["now"]
+            .as_u64()
+            .is_some()
+    );
+    assert_contains(
+        listed[0]["action"].as_str().unwrap(),
+        "without debug information",
+    );
+    assert_contains(
+        listed[0]["action"].as_str().unwrap(),
+        "does not modify files",
+    );
+    assert_eq!(
+        before,
+        std::fs::read(project.dir.join("fixture.wasm")).unwrap()
+    );
+}
+
+#[test]
+fn grown_data_is_distinct_from_debug_and_never_prints_its_content() {
+    let project = accepted_tight("explain-data", &sized_module(10, "ab", ""));
+    change_to(&project, &sized_module(10, &"s3cret-".repeat(60), ""));
+
+    let run = project.run(&["check", "--json"]);
+    let listed = explanations(&run);
+    assert_eq!(rules(&listed), ["explain/data-growth"]);
+    assert_contains(
+        listed[0]["action"].as_str().unwrap(),
+        "Examine the embedded data",
+    );
+    assert_contains(
+        listed[0]["coverage"].as_str().unwrap(),
+        "not tied to one segment",
+    );
+    assert!(!run.stdout.contains("s3cret"));
+    assert!(!project.run(&["check"]).stdout.contains("s3cret"));
+}
+
+#[test]
+fn the_function_that_grew_is_named_with_its_reach_from_an_export() {
+    let project = accepted_tight("explain-function", &sized_module(10, "ab", ""));
+    change_to(&project, &sized_module(110, "ab", ""));
+
+    let json = project.run(&["check", "--json"]);
+    let listed = explanations(&json);
+    assert_eq!(rules(&listed), ["explain/function-growth"]);
+    let function = &listed[0];
+    assert_eq!(function["status"], "exact");
+    assert_eq!(function["subject"], "parse");
+    let body = evidence_of(function, "function parse");
+    assert_eq!(
+        body["now"].as_u64().unwrap() - body["was"].as_u64().unwrap(),
+        100
+    );
+    assert_eq!(function["reached"]["reachability"], "direct");
+    assert_eq!(function["reached"]["root"], "export \"parse\"");
+    assert_contains(
+        function["action"].as_str().unwrap(),
+        "Review the function parse",
+    );
+
+    let text = project.run(&["check"]);
+    assert_contains(&text.stdout, "Function parse grew by 100 B (exact");
+    assert_contains(
+        &text.stdout,
+        "Why parse is in the module: reached from export \"parse\"",
+    );
+}
+
+#[test]
+fn a_new_import_is_explained_as_a_host_requirement_without_a_size_claim() {
+    let project = accepted_interface("explain-import", "");
+    change_to(
+        &project,
+        r#"(module
+    (import "env" "log" (func (param i32)))
+    (import "env" "now" (func (result f64)))
+    (memory (export "memory") 1 4)
+    (func (export "add") (param i32 i32) (result i32) local.get 0))"#,
+    );
+
+    let json = project.run(&["check", "--json"]);
+    let listed = explanations(&json);
+    assert_eq!(rules(&listed), ["explain/import-added"]);
+    assert_eq!(listed[0]["status"], "exact");
+    assert_contains(
+        listed[0]["evidence"][0]["what"].as_str().unwrap(),
+        "env.now",
+    );
+    assert_contains(
+        listed[0]["action"].as_str().unwrap(),
+        "host provides env.now",
+    );
+    assert_contains(
+        listed[0]["coverage"].as_str().unwrap(),
+        "what it costs is not known",
+    );
+    assert_eq!(json.code, 0, "{}", json.stderr);
+}
+
+#[test]
+fn memory_growth_in_one_scenario_is_located_in_the_trace() {
+    let project = Project::new("explain-memory", &two_scenarios("", 3));
+    project.write("big.mjs", BIG);
+    project.write("follows.mjs", FOLLOWS_FILE);
+    project.write("pages.txt", "0");
+    project.run(&["accept", "--all", "--reason", "first"]);
+    project.write("pages.txt", "3");
+
+    let json = project.run(&["check", "--json"]);
+    let listed = explanations(&json);
+    assert_eq!(rules(&listed), ["explain/memory-growth"]);
+    let memory = &listed[0];
+    assert_eq!(memory["subject"], "follows.mjs");
+    assert_eq!(memory["status"], "exact");
+    assert_contains(
+        memory["summary"].as_str().unwrap(),
+        "The first run of follows.mjs",
+    );
+    let peak = evidence_of(memory, "peak capacity");
+    assert_eq!(peak["was"], 65_536);
+    assert_eq!(peak["now"], 4 * 65_536);
+    let first = evidence_of(memory, "capacity after the first run");
+    assert_eq!(first["now"], 4 * 65_536);
+    assert_contains(
+        memory["action"].as_str().unwrap(),
+        "first call of the scenario",
+    );
+    let text = project.run(&["check"]);
+    assert_contains(&text.stdout, "[explain/memory-growth]");
+    assert_contains(&text.stdout, "peak capacity 64.0 KiB -> 256.0 KiB");
+}
+
+#[test]
+fn without_evidence_there_is_no_explanation_instead_of_a_guess() {
+    // Only declarations grow: more exports of one function. Nothing the
+    // explanations read (code, data, names, debug, imports) moved.
+    let few = r#"(module (func $f (export "a")) (func $g (export "b") (nop) (nop)))"#;
+    let many = format!(
+        "(module (func $f (export \"a\")) (func $g (export \"b\") (nop) (nop)) {})",
+        (0..40)
+            .map(|i| format!("(export \"alias_with_a_long_name_{i}\" (func $f))"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let project = accepted_tight("explain-nothing", few);
+    change_to(&project, &many);
+
+    let json = project.run(&["check", "--json"]);
+    let document: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    assert!(
+        document["modules"][0]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["rule"] == "size/raw")
+    );
+    assert_eq!(explanations(&json).len(), 0);
+    assert_eq!(document["modules"][0]["explanations_omitted"], 0);
+    assert!(!project.run(&["check"]).stdout.contains("Explanations:"));
+}
+
+#[test]
+fn a_stripped_module_gets_no_guessed_function_only_the_part_that_grew() {
+    let stripped = |first: usize, second: usize| {
+        format!(
+            "(module (func {}) (func {}))",
+            "nop ".repeat(first),
+            "nop ".repeat(second)
+        )
+    };
+    let project = accepted_tight("explain-stripped", &stripped(10, 50));
+    change_to(&project, &stripped(50, 90));
+
+    let listed = explanations(&project.run(&["check", "--json"]));
+    assert_eq!(rules(&listed), ["explain/code-growth"]);
+    assert_contains(
+        listed[0]["summary"].as_str().unwrap(),
+        "peakmark never matches by index",
+    );
+    assert_eq!(listed[0]["reached"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_baseline_without_sizes_is_named_before_any_optimization() {
+    let project = accepted_tight("explain-old-entry", &sized_module(10, "ab", ""));
+    let mut saved = baseline_json(&project);
+    let inventory = saved["modules"]["fixture"]["inventory"]
+        .as_object_mut()
+        .unwrap();
+    inventory.remove("sections");
+    inventory.remove("functions");
+    project.write("peakmark.baseline.json", saved.to_string());
+    change_to(&project, &sized_module(110, &"x".repeat(300), ""));
+
+    let listed = explanations(&project.run(&["check", "--json"]));
+    assert_eq!(rules(&listed), ["explain/insufficient"]);
+    assert_contains(
+        listed[0]["action"].as_str().unwrap(),
+        "Accept the baseline again on purpose",
+    );
+}
+
+#[test]
+fn the_list_is_capped_ranked_and_the_same_on_every_run() {
+    let project = accepted_tight("explain-cap", &sized_module(10, "ab", ""));
+    change_to(
+        &project,
+        &format!(
+            r#"(module
+    (import "env" "log" (func))
+    (memory (export "memory") 1)
+    (func $parse (export "parse") {})
+    (func $render (export "render") {})
+    (data (i32.const 0) "{}")
+    (@custom ".debug_info" "{}"))"#,
+            "nop ".repeat(110),
+            "nop ".repeat(20),
+            "d".repeat(400),
+            "0".repeat(200),
+        ),
+    );
+
+    let first = project.run(&["check", "--json"]);
+    let listed = explanations(&first);
+    assert_eq!(listed.len(), 3, "{}", rules(&listed).join(", "));
+    // The interface comes first, then the exact size explanations by bytes.
+    assert_eq!(listed[0]["rule"], "explain/import-added");
+    assert_eq!(listed[1]["rule"], "explain/data-growth");
+    let document: serde_json::Value = serde_json::from_str(&first.stdout).unwrap();
+    assert_eq!(document["modules"][0]["explanations_omitted"], 1);
+    // The cap hides no finding: every change stays in the document.
+    let all = changes(&first);
+    assert!(with_rule(&all, "baseline/size-sections").is_some());
+    assert!(with_rule(&all, "baseline/size-functions").is_some());
+    assert!(with_rule(&all, "baseline/interface-added").is_some());
+
+    let second = project.run(&["check", "--json"]);
+    assert_eq!(explanations(&second), listed);
+    assert_contains(
+        &project.run(&["check"]).stdout,
+        "1 further explanation was left out",
+    );
+}
+
+#[test]
+fn explanations_come_after_the_hard_failure_and_change_neither_exit_code_nor_files() {
+    let project = Project::new(
+        "explain-failure",
+        "[[module]]\nname = \"fixture\"\nartifact = \"fixture.wasm\"\n[module.budget]\nraw = \"100 B\"\n",
+    );
+    project.write(
+        "fixture.wasm",
+        wat::parse_str(sized_module(60, "ab", "")).unwrap(),
+    );
+    let before = project.read("peakmark.toml");
+
+    let run = project.run(&["check"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let over = run.stdout.find("[size/raw]").unwrap();
+    let explained = run.stdout.find("[explain/composition]").unwrap();
+    assert!(over < explained, "{}", run.stdout);
+    assert_contains(&run.stdout, "peakmark check: over budget: fixture");
+    assert_eq!(before, project.read("peakmark.toml"));
+    assert!(!project.exists("peakmark.baseline.json"));
+    assert!(!project.exists("peakmark.history.jsonl"));
+}

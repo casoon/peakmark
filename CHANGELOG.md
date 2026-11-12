@@ -55,6 +55,12 @@ change the configuration, the baseline format or the output.
   [Why a function is in the module](https://casoon.github.io/peakmark/docs/concepts/inventory/#why-a-function-is-in-the-module).
 - **Library:** `peakmark::reach` (`Reach::from_bytes`, `Reach::explain`, `Reach::report`) is the
   reusable reference graph behind it.
+- **Explanations:** `check` lists up to three ranked, evidence-backed explanations per module
+  with before and after, status, coverage and a next step; `--json` has them as `explanations`.
+  They never hide a finding or change a verdict. Details:
+  [Explanations](https://casoon.github.io/peakmark/docs/concepts/explanations/).
+- **Library:** `peakmark::explain` assembles them from a `ModuleResult`, which now carries
+  `explanations`.
 
 ### Changed
 

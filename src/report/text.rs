@@ -5,6 +5,7 @@ use runemark::{
 };
 
 use crate::check::{Change, Issue, Level, ModuleResult, Reason, verdict};
+use crate::explain::{Evidence, Reached};
 use crate::inventory::{
     CustomKind, ExternType, FeatureUse, FunctionBody, ImportName, Inventory, MemoryType, Names,
     SectionKind, TableType, TargetFeatureMode,
@@ -90,6 +91,10 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
     for group in results.iter().filter_map(module_group) {
         report = report.add_group(group);
     }
+    // After every finding of every module: an explanation never pushes one down.
+    for group in results.iter().filter_map(explanation_group) {
+        report = report.add_group(group);
+    }
 
     if !over.is_empty() {
         report = report.add_next_step(NextStep::new(
@@ -151,6 +156,108 @@ fn module_group(result: &ModuleResult) -> Option<FindingGroup> {
         || !result.changes.is_empty()
         || result.baseline.is_none();
     any.then_some(group)
+}
+
+/// The explanations of one module, each a claim with its evidence and then
+/// what it does not cover and what to do next; `None` if there are none.
+fn explanation_group(result: &ModuleResult) -> Option<FindingGroup> {
+    let explained = &result.explanations;
+    if explained.listed.is_empty() {
+        return None;
+    }
+    // One finding per explanation: the compact report shows three per group.
+    let mut group =
+        FindingGroup::new(format!("Explanations: {}", result.module.name)).with_advisory(true);
+    for (rank, explanation) in explained.listed.iter().enumerate() {
+        let evidence: Vec<_> = explanation.evidence.iter().map(evidence_text).collect();
+        let evidence = if evidence.is_empty() {
+            String::new()
+        } else {
+            format!("; {}", evidence.join("; "))
+        };
+        let mut message = format!(
+            "{}. {} ({}{evidence}).",
+            rank + 1,
+            explanation.summary,
+            explanation.status.label()
+        );
+        if let Some(reached) = &explanation.reached {
+            let _ = write!(message, " {}.", reached_text(reached));
+        }
+        let _ = write!(
+            message,
+            " Next: {}. Coverage: {}.",
+            explanation.action, explanation.coverage
+        );
+        if explained.omitted > 0 && rank + 1 == explained.listed.len() {
+            let _ = write!(
+                message,
+                " {} further explanation{} left out; the findings above stay complete and `--json` lists them in full.",
+                explained.omitted,
+                if explained.omitted == 1 {
+                    " was"
+                } else {
+                    "s were"
+                }
+            );
+        }
+        group = group.add_finding(Finding::new(Tone::Info, message).with_rule_id(explanation.rule));
+    }
+    Some(group)
+}
+
+/// `code bytes 3.0 kB -> 3.4 kB`; a side that is not known is left out.
+fn evidence_text(evidence: &Evidence) -> String {
+    let bytes = |bytes: u64| {
+        if evidence.capacity {
+            format_binary(bytes)
+        } else {
+            format_decimal(bytes)
+        }
+    };
+    match (evidence.was, evidence.now) {
+        (Some(was), Some(now)) => format!("{} {} -> {}", evidence.what, bytes(was), bytes(now)),
+        (None, Some(now)) => format!("{} now {}", evidence.what, bytes(now)),
+        (Some(was), None) => format!("{} was {}", evidence.what, bytes(was)),
+        (None, None) => evidence.what.clone(),
+    }
+}
+
+/// Why the function is in the module, from the reference graph.
+fn reached_text(reached: &Reached) -> String {
+    let how = match reached.reachability {
+        Reachability::Direct => {
+            let path = if reached.path.len() > 6 {
+                format!(
+                    "{} -> ... -> {}",
+                    reached.path[..3].join(" -> "),
+                    reached.path[reached.path.len() - 3..].join(" -> ")
+                )
+            } else {
+                reached.path.join(" -> ")
+            };
+            format!(
+                "reached from {}: {path}",
+                reached.root.as_deref().unwrap_or("a root")
+            )
+        }
+        Reachability::ViaTable => {
+            "reached only through the table; indirect dispatch is assumed to reach every entry"
+                .to_string()
+        }
+        Reachability::NoStaticRoot => {
+            "no static root in the reference graph (not a statement that it is unused)".to_string()
+        }
+        Reachability::Unknown => {
+            "unknown: the module uses operators the reference graph does not model".to_string()
+        }
+    };
+    format!(
+        "Why {} is in the module: {how}; {} direct caller{}",
+        reached.function,
+        reached.callers,
+        if reached.callers == 1 { "" } else { "s" }
+    )
 }
 
 /// The `--details` groups: the measured values, then the inventory per module.
