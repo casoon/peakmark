@@ -17,7 +17,7 @@ use crate::date::today;
 use crate::error::Error;
 use crate::measure::Measured;
 use crate::metric::Values;
-use crate::runner::{RUNNER_SCHEMA, WARMUP_RUNS};
+use crate::runner::{RUNNER_SCHEMA, Unobserved, WARMUP_RUNS};
 
 /// The baseline file, next to the configuration.
 pub const BASELINE_FILE: &str = "peakmark.baseline.json";
@@ -79,11 +79,22 @@ pub struct ScenarioEntry {
     pub sha256: String,
     /// How often the script ran on the instance.
     pub repeat: u32,
-    /// Memory held after the last run.
+    /// The highest capacity observed.
     pub peak_memory: u64,
     /// What each run after the first added; `None` if it ran once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub growth_per_run: Option<u64>,
+    /// Capacity right after instantiation. Absent in entries accepted before
+    /// the trace was kept; never read as zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_instantiate: Option<u64>,
+    /// Capacity after each run, in order. Empty in entries accepted before the
+    /// trace was kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after_run: Vec<u64>,
+    /// What the measurement could not observe when it was accepted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unobserved: Vec<Unobserved>,
 }
 
 impl Entry {
@@ -112,6 +123,9 @@ impl Entry {
                             repeat: s.repeat,
                             peak_memory: s.peak_memory,
                             growth_per_run: s.growth_per_run,
+                            after_instantiate: Some(s.after_instantiate),
+                            after_run: s.after_run.clone(),
+                            unobserved: s.coverage.unobserved.clone(),
                         },
                     )
                 })
@@ -228,6 +242,16 @@ mod tests {
             contract: None,
             scenarios: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn a_scenario_entry_without_a_trace_still_reads_and_leaves_the_trace_empty() {
+        let text = r#"{"sha256":"a","repeat":3,"peak_memory":65536,"growth_per_run":0}"#;
+        let entry: ScenarioEntry = serde_json::from_str(text).unwrap();
+        assert_eq!(entry.after_instantiate, None);
+        assert!(entry.after_run.is_empty() && entry.unobserved.is_empty());
+        let written = serde_json::to_string(&entry).unwrap();
+        assert!(!written.contains("after_run"), "{written}");
     }
 
     #[test]

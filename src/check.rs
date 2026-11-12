@@ -9,7 +9,7 @@ use crate::compress::SETTINGS;
 use crate::config::Module;
 use crate::measure::Measured;
 use crate::metric::Metric;
-use crate::runner::{RUNNER_SCHEMA, WARMUP_RUNS};
+use crate::runner::{RUNNER_SCHEMA, Unobserved, WARMUP_RUNS};
 
 /// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +83,14 @@ pub enum Change {
         /// Why.
         reason: Reason,
     },
+    /// Part of what a scenario is meant to measure was not observed. The values
+    /// cover less than the module does.
+    Unobserved {
+        /// The scenario file as configured.
+        scenario: String,
+        /// What was not observed.
+        what: Unobserved,
+    },
     /// The scenarios ran in another Node version than when the baseline was accepted.
     /// The comparison stays valid: memory is read from the instance.
     RuntimeChanged {
@@ -102,6 +110,7 @@ impl Change {
             Change::ScenarioNew { .. } => "baseline/scenario-new",
             Change::MetricMissing { .. } => "baseline/metric-missing",
             Change::Incomparable { .. } => "baseline/incomparable",
+            Change::Unobserved { .. } => "memory/coverage",
             Change::RuntimeChanged { .. } => "baseline/runtime",
         }
     }
@@ -110,7 +119,7 @@ impl Change {
     #[must_use]
     pub fn level(&self) -> Level {
         match self {
-            Change::RuntimeChanged { .. } => Level::Note,
+            Change::Unobserved { .. } | Change::RuntimeChanged { .. } => Level::Note,
             _ => Level::Warning,
         }
     }
@@ -189,6 +198,14 @@ pub fn evaluate<'a>(
         })
         .collect();
     let mut changes = Vec::new();
+    for scenario in &measured.scenarios {
+        for what in &scenario.coverage.unobserved {
+            changes.push(Change::Unobserved {
+                scenario: scenario.id(),
+                what: what.clone(),
+            });
+        }
+    }
     if let Some(entry) = baseline {
         compare_scenarios(entry, &measured, tolerance, &mut issues, &mut changes);
         compare_module(entry, &measured, &mut changes);
@@ -362,7 +379,7 @@ mod tests {
 
     use super::*;
     use crate::metric::Values;
-    use crate::runner::ScenarioResult;
+    use crate::runner::{Coverage, ScenarioResult};
     use crate::wasm::Sections;
 
     #[test]
@@ -404,6 +421,14 @@ mod tests {
         ScenarioResult {
             file: PathBuf::from(file),
             after_instantiate: PAGE,
+            after_run: vec![pages * PAGE; repeat as usize],
+            warmup_growth: pages * PAGE - PAGE,
+            memories: Vec::new(),
+            coverage: Coverage {
+                instances: 1,
+                unrelated_instances: 0,
+                unobserved: Vec::new(),
+            },
             peak_memory: pages * PAGE,
             growth_per_run: (repeat > 1).then_some(0),
             instantiate_ms: 1.0,

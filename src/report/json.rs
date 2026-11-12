@@ -73,6 +73,9 @@ fn change(change: &Change) -> serde_json::Value {
             detail["scenario"] = object!(scenario);
             detail
         }
+        Change::Unobserved { scenario, what } => {
+            object!({ "scenario": scenario, "unobserved": what })
+        }
         Change::RuntimeChanged { was, now } => object!({ "was": was, "now": now }),
     };
     object!({ "rule": change.rule(), "level": level, "detail": detail })

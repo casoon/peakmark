@@ -59,7 +59,12 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
 
     let mut scenarios = Vec::new();
     for scenario in &module.scenarios {
-        scenarios.push(run_scenario(config, module, scenario)?);
+        scenarios.push(run_scenario(
+            config,
+            module,
+            scenario,
+            inspection.memory_count,
+        )?);
     }
 
     let values = Values {

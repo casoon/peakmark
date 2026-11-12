@@ -4,7 +4,7 @@
 use std::fmt;
 
 use wasmparser::{
-    BinaryReaderError, Encoding, FuncValidatorAllocations, Parser, Payload, ValidPayload,
+    BinaryReaderError, Encoding, FuncValidatorAllocations, Parser, Payload, TypeRef, ValidPayload,
     Validator, WasmFeatures,
 };
 
@@ -57,6 +57,8 @@ pub struct Inspection {
     pub sections: Sections,
     /// What the memory section asks for in bytes; `None` if it has none.
     pub initial_memory: Option<u64>,
+    /// How many memories the module declares, imported ones included.
+    pub memory_count: u32,
 }
 
 /// Validates the module completely, then reads its section sizes and declared
@@ -74,11 +76,20 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection, InspectError> {
             Payload::MemorySection(reader) => {
                 for memory in reader {
                     let memory = memory.map_err(InspectError::Invalid)?;
+                    inspection.memory_count += 1;
                     let page = memory
                         .page_size_log2
                         .map_or(DEFAULT_PAGE, |log2| 1u64 << log2);
                     let declared = inspection.initial_memory.get_or_insert(0);
                     *declared = declared.saturating_add(memory.initial.saturating_mul(page));
+                }
+            }
+            Payload::ImportSection(reader) => {
+                for import in reader.into_imports() {
+                    let import = import.map_err(InspectError::Invalid)?;
+                    if matches!(import.ty, TypeRef::Memory(_)) {
+                        inspection.memory_count += 1;
+                    }
                 }
             }
             Payload::CodeSectionStart { size, .. } => inspection.sections.code = u64::from(size),
@@ -156,6 +167,13 @@ mod tests {
     fn reads_the_declared_memory_in_bytes() {
         let bytes = module("(module (memory 3))");
         assert_eq!(inspect(&bytes).unwrap().initial_memory, Some(3 * 65_536));
+    }
+
+    #[test]
+    fn counts_defined_and_imported_memories() {
+        let bytes = module(r#"(module (import "env" "m" (memory 1)) (memory 1) (memory 2))"#);
+        assert_eq!(inspect(&bytes).unwrap().memory_count, 3);
+        assert_eq!(inspect(&module("(module (func))")).unwrap().memory_count, 0);
     }
 
     #[test]

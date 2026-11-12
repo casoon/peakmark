@@ -1,6 +1,8 @@
 use runemark::{Finding, FindingGroup, Location, Metric as ReportMetric, NextStep, Report, Tone};
 
 use crate::check::{Change, Issue, Level, ModuleResult, Reason, verdict};
+use crate::runner::{ScenarioResult, Unobserved};
+use crate::units::format_binary;
 
 /// The report `check` prints. With `details`, it also lists every measured
 /// value.
@@ -64,6 +66,9 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
                     result.measured.values.summary()
                 ),
             ));
+            for scenario in &result.measured.scenarios {
+                measured = measured.add_finding(Finding::new(Tone::Info, trace(scenario)));
+            }
         }
         report = report.add_group(measured);
     }
@@ -109,6 +114,22 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
         );
     }
     report
+}
+
+/// One line per scenario: the capacity trace split into warm-up and later growth.
+/// It states what the numbers are, not whether anything leaks.
+fn trace(scenario: &ScenarioResult) -> String {
+    let later = match scenario.growth_per_run {
+        Some(growth) => format!(", then {} per run", format_binary(growth)),
+        None => String::new(),
+    };
+    format!(
+        "{}: capacity {} after instantiate, +{} in the first run{later} ({} runs, page steps of 64 KiB)",
+        scenario.id(),
+        format_binary(scenario.after_instantiate),
+        format_binary(scenario.warmup_growth),
+        scenario.repeat,
+    )
 }
 
 fn finding(issue: &Issue) -> Finding {
@@ -163,6 +184,19 @@ fn change_finding(change: &Change) -> Finding {
                 (None, Reason::Compression) => format!("Sizes are not compared: {why}"),
                 (None, _) => format!("Memory is not compared: {why}"),
             }
+        }
+        Change::Unobserved { scenario, what } => {
+            let what = match what {
+                Unobserved::InternalMemory { count } => format!(
+                    "{count} declared memor{} neither exported nor imported, so not measured",
+                    if *count == 1 { "y is" } else { "ies are" }
+                ),
+                Unobserved::Workers { count } => format!(
+                    "{count} worker{} started, and a module run there is not measured",
+                    if *count == 1 { "" } else { "s" }
+                ),
+            };
+            format!("Scenario {scenario}: {what}")
         }
         Change::RuntimeChanged { was, now } => {
             format!("Node {now}, accepted with {was}; values stay comparable")

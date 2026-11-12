@@ -743,3 +743,243 @@ fn a_baseline_format_this_peakmark_does_not_read_stops_the_check() {
     assert_contains(&run.stderr, "update peakmark");
     assert_eq!(project.read("peakmark.baseline.json"), text);
 }
+
+// Memory observation: what is counted, what is left out, what is reported as not seen.
+
+/// A bump allocator that never frees: allocation inside the one page it has.
+fn leaky_module() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (memory (export "memory") 1)
+            (global $top (mut i32) (i32.const 0))
+            (func (export "alloc") (param i32) (result i32)
+                global.get $top
+                global.get $top
+                local.get 0
+                i32.add
+                global.set $top))"#,
+    )
+    .unwrap()
+}
+
+/// A project whose one scenario is `source`.
+fn memory_project(name: &str, scenario: &str, repeat: u32, source: &str) -> Project {
+    let project = Project::new(name, &config("", scenario, repeat));
+    project.write(scenario, source);
+    project
+}
+
+fn module_json(project: &Project) -> serde_json::Value {
+    let run = project.run(&["check", "--json"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    result["modules"][0].clone()
+}
+
+fn trace(scenario: &serde_json::Value) -> Vec<u64> {
+    scenario["after_run"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn the_trace_tells_steady_warm_up_per_run_and_delayed_growth_apart() {
+    const PAGE: u64 = 65_536;
+    const DELAYED: &str = "let run = 0;
+export default (module) => {
+  run += 1;
+  if (run === 4) module.grow(2);
+};
+";
+    // (scenario source, capacity after each of five runs, warm-up growth, growth per run)
+    let cases = [
+        ("trace-steady", STEADY, vec![4 * PAGE; 5], 3 * PAGE, 0),
+        (
+            "trace-per-run",
+            LEAK,
+            vec![2 * PAGE, 3 * PAGE, 4 * PAGE, 5 * PAGE, 6 * PAGE],
+            PAGE,
+            PAGE,
+        ),
+        (
+            "trace-delayed",
+            DELAYED,
+            vec![PAGE, PAGE, PAGE, 3 * PAGE, 3 * PAGE],
+            0,
+            PAGE / 2,
+        ),
+    ];
+    for (name, source, expected, warmup, growth) in cases {
+        let project = memory_project(name, "case.mjs", 5, source);
+        let module = module_json(&project);
+        let scenario = &module["scenarios"][0];
+        assert_eq!(trace(scenario), expected, "{name}");
+        assert_eq!(scenario["warmup_growth"], warmup, "{name}");
+        assert_eq!(scenario["growth_per_run"], growth, "{name}");
+    }
+}
+
+#[test]
+fn a_leak_inside_reserved_pages_does_not_move_the_capacity() {
+    let project = memory_project(
+        "leak-in-capacity",
+        "bump.mjs",
+        5,
+        "export default (module) => { module.alloc(1000); };\n",
+    );
+    project.write("fixture.wasm", leaky_module());
+    let module = module_json(&project);
+    let scenario = &module["scenarios"][0];
+    assert_eq!(trace(scenario), vec![65_536; 5]);
+    assert_eq!(scenario["growth_per_run"], 0);
+    assert_eq!(scenario["coverage"]["unobserved"], serde_json::json!([]));
+}
+
+#[test]
+fn the_details_split_the_first_run_from_the_later_ones() {
+    let project = memory_project("details-trace", "steady.mjs", 5, STEADY);
+    let run = project.run(&["check", "--details"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "capacity 64.0 KiB after instantiate, +192.0 KiB in the first run",
+    );
+    assert_contains(&run.stdout, "then 0 B per run (5 runs");
+}
+
+#[test]
+fn accept_keeps_the_trace_per_scenario() {
+    let project = memory_project("accept-trace", "steady.mjs", 3, STEADY);
+    project.run(&["accept", "--all", "--reason", "first"]);
+    let accepted = baseline_json(&project);
+    let entry = &accepted["modules"]["fixture"]["scenarios"]["steady.mjs"];
+    assert_eq!(entry["after_instantiate"], 65_536);
+    assert_eq!(
+        entry["after_run"],
+        serde_json::json!([262_144, 262_144, 262_144])
+    );
+}
+
+#[test]
+fn an_unrelated_instance_is_left_out_and_a_second_instance_of_the_module_is_counted() {
+    let other = wat::parse_str(r#"(module (memory (export "memory") 10))"#).unwrap();
+    let scenario = "import { readFileSync } from 'node:fs';
+const other = readFileSync(new URL('./other.wasm', import.meta.url));
+const own = readFileSync(new URL('./fixture.wasm', import.meta.url));
+let done = false;
+export default async () => {
+  if (done) return;
+  done = true;
+  await WebAssembly.instantiate(other, {});
+  await WebAssembly.instantiate(own, {});
+};
+";
+    let project = memory_project("other-instance", "second.mjs", 2, scenario);
+    project.write("other.wasm", other);
+    let module = module_json(&project);
+    let scenario = &module["scenarios"][0];
+
+    // The unrelated module's ten pages are not in the values; the second own instance is.
+    assert_eq!(scenario["coverage"]["instances"], 2);
+    assert_eq!(scenario["coverage"]["unrelated_instances"], 1);
+    assert_eq!(scenario["memories"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        scenario["memories"][1]["after_instantiate"],
+        serde_json::Value::Null
+    );
+    assert_eq!(trace(scenario), vec![2 * 65_536; 2]);
+    assert_eq!(scenario["peak_memory"], 2 * 65_536);
+}
+
+#[test]
+fn a_memory_shared_by_two_instances_is_counted_once() {
+    let imported = wat::parse_str(
+        r#"(module
+            (import "env" "memory" (memory 1 4 shared))
+            (func (export "grow") (param i32) (result i32)
+                local.get 0
+                memory.grow))"#,
+    )
+    .unwrap();
+    let glue = "import { readFileSync } from 'node:fs';
+const memory = new WebAssembly.Memory({ initial: 1, maximum: 4, shared: true });
+const bytes = readFileSync(new URL('./fixture.wasm', import.meta.url));
+const first = await WebAssembly.instantiate(bytes, { env: { memory } });
+await WebAssembly.instantiate(bytes, { env: { memory } });
+export default first.instance.exports;
+";
+    let project = Project::new(
+        "shared-memory",
+        &config("", "steady.mjs", 3).replace(
+            "artifact = \"fixture.wasm\"",
+            "artifact = \"fixture.wasm\"\nglue = \"glue.mjs\"",
+        ),
+    );
+    project.write("fixture.wasm", imported);
+    project.write("glue.mjs", glue);
+    let module = module_json(&project);
+    let scenario = &module["scenarios"][0];
+
+    assert_eq!(scenario["coverage"]["instances"], 2);
+    let memories = scenario["memories"].as_array().unwrap();
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0]["origin"], "import");
+    assert_eq!(memories[0]["shared"], true);
+    assert_eq!(memories[0]["instances"], 2);
+    assert_eq!(scenario["peak_memory"], 4 * 65_536);
+}
+
+#[test]
+fn memory_nobody_exports_or_imports_is_reported_as_not_observed_and_not_as_zero() {
+    let two = wat::parse_str(r#"(module (memory (export "memory") 1) (memory 3))"#).unwrap();
+    let project = memory_project(
+        "internal-memory",
+        "noop.mjs",
+        2,
+        "export default () => {};\n",
+    );
+    project.write("fixture.wasm", two);
+    let module = module_json(&project);
+    let scenario = &module["scenarios"][0];
+    assert_eq!(scenario["peak_memory"], 65_536);
+    assert_eq!(
+        scenario["coverage"]["unobserved"],
+        serde_json::json!([{ "kind": "internal_memory", "count": 1 }])
+    );
+    let change = &module["changes"][0];
+    assert_eq!(change["rule"], "memory/coverage");
+    assert_eq!(change["level"], "note");
+
+    let text = project.run(&["check"]);
+    assert_eq!(text.code, 0, "{}", text.stderr);
+    assert_contains(&text.stdout, "[memory/coverage]");
+    assert_contains(&text.stdout, "neither exported nor imported");
+}
+
+#[test]
+fn a_module_with_no_observable_memory_stops_the_check_instead_of_reporting_zero() {
+    let hidden = wat::parse_str("(module (memory 1))").unwrap();
+    let project = memory_project("no-memory", "noop.mjs", 2, "export default () => {};\n");
+    project.write("fixture.wasm", hidden);
+    let run = project.run(&["check"]);
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "no memory of the module can be observed");
+}
+
+#[test]
+fn a_worker_is_reported_as_not_observed() {
+    let scenario = "import { Worker } from 'node:worker_threads';
+export default () => new Promise((resolve) => {
+  new Worker('0', { eval: true }).on('exit', resolve);
+});
+";
+    let project = memory_project("worker", "worker.mjs", 2, scenario);
+    let module = module_json(&project);
+    assert_eq!(
+        module["scenarios"][0]["coverage"]["unobserved"],
+        serde_json::json!([{ "kind": "workers", "count": 2 }])
+    );
+}

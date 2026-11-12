@@ -31,18 +31,85 @@ const OUTPUT_GRACE: Duration = Duration::from_millis(250);
 /// How long to wait for the output after the descendants were stopped.
 const OUTPUT_GIVE_UP: Duration = Duration::from_secs(2);
 
-/// What one scenario measured.
+/// How the runner came to see a memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    /// The instance exports it.
+    Export,
+    /// The instance imports it and it was found in the imports it was given.
+    Import,
+}
+
+/// The capacity of one observed linear memory over the scenario. A memory is
+/// listed once, however many instances of the module share it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryTrace {
+    /// Whether it was seen as an export or as an import.
+    pub origin: Origin,
+    /// Whether it is a shared memory.
+    pub shared: bool,
+    /// How many instances of the module use it.
+    pub instances: u32,
+    /// Capacity after instantiation; `None` if the memory did not exist yet.
+    #[serde(alias = "afterInstantiate")]
+    pub after_instantiate: Option<u64>,
+    /// Capacity after each run; `None` before it existed or after it was
+    /// garbage collected.
+    #[serde(alias = "afterRun")]
+    pub after_run: Vec<Option<u64>>,
+}
+
+/// Something a measurement could not observe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Unobserved {
+    /// The module declares memory that is neither exported nor imported, so
+    /// no instance gives it away.
+    InternalMemory {
+        /// How many such memories the observed instances hold together.
+        count: u32,
+    },
+    /// The scenario started worker threads; a module instantiated there is not watched.
+    Workers {
+        /// How many workers were started.
+        count: u32,
+    },
+}
+
+/// What the runner watched, and what it did not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Coverage {
+    /// Instances of the configured module that were observed.
+    pub instances: u32,
+    /// Instances of other modules; their memory is not part of the values.
+    pub unrelated_instances: u32,
+    /// What could not be observed.
+    pub unobserved: Vec<Unobserved>,
+}
+
+/// What one scenario measured. Memory values are the summed capacity of the
+/// observed memories of the configured module: the pages the instance has
+/// reserved, not what is allocated in them.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScenarioResult {
     /// The scenario script as configured.
     pub file: PathBuf,
-    /// Memory held right after instantiation.
+    /// Capacity right after instantiation.
     pub after_instantiate: u64,
-    /// Memory held after the last run.
+    /// Capacity after each run; the last entry is the capacity at the end.
+    pub after_run: Vec<u64>,
+    /// The highest capacity observed.
     pub peak_memory: u64,
-    /// What each run after the first adds; `None` if the scenario runs once.
+    /// What the warm-up runs added over the capacity after instantiation.
+    pub warmup_growth: u64,
+    /// What each run after the warm-up adds, averaged; `None` if there is none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub growth_per_run: Option<u64>,
+    /// Every observed memory with its own trace.
+    pub memories: Vec<MemoryTrace>,
+    /// What was and was not observed.
+    pub coverage: Coverage,
     /// Milliseconds instantiation took.
     pub instantiate_ms: f64,
     /// How often the script ran on the instance.
@@ -84,9 +151,22 @@ struct RunnerResult {
     after_run: Vec<u64>,
     instantiate_ms: f64,
     node: String,
+    memories: Vec<MemoryTrace>,
+    coverage: RunnerCoverage,
 }
 
-/// Runs `scenario` against `module` in Node.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunnerCoverage {
+    instances: u32,
+    unrelated: u32,
+    workers: u32,
+    /// For each observed instance, how many memories it was seen with.
+    per_instance: Vec<u32>,
+}
+
+/// Runs `scenario` against `module` in Node. `declared_memories` is how many
+/// memories the module declares, imported ones included.
 ///
 /// # Errors
 ///
@@ -96,6 +176,7 @@ pub fn run_scenario(
     config: &Config,
     module: &Module,
     scenario: &Scenario,
+    declared_memories: u32,
 ) -> Result<ScenarioResult, Error> {
     let absolute = |path: &Path| {
         std::path::absolute(config.dir.join(path)).map_err(|source| Error::Resolve {
@@ -189,7 +270,7 @@ pub fn run_scenario(
         })?;
     Ok(ScenarioResult {
         sha256: sha256(&script),
-        ..summarise(&scenario.file, &result)
+        ..summarise(&scenario.file, result, declared_memories)
     })
 }
 
@@ -313,21 +394,50 @@ fn kill_tree(child: &mut Child) {
     let _ = child.kill();
 }
 
-fn summarise(file: &Path, result: &RunnerResult) -> ScenarioResult {
-    // Linear memory never shrinks, so what is held after the last run is the peak.
+fn summarise(file: &Path, result: RunnerResult, declared_memories: u32) -> ScenarioResult {
     let first = result.after_run[0];
     let last = result.after_run[result.after_run.len() - 1];
     let later_runs = result.after_run.len() as u64 - 1;
+    // Capacity only grows, unless a memory was collected; the highest sample is the peak.
+    let peak = result
+        .after_run
+        .iter()
+        .copied()
+        .fold(result.after_instantiate, u64::max);
+
+    let hidden: u32 = result
+        .coverage
+        .per_instance
+        .iter()
+        .map(|&seen| declared_memories.saturating_sub(seen))
+        .sum();
+    let mut unobserved = Vec::new();
+    if hidden > 0 {
+        unobserved.push(Unobserved::InternalMemory { count: hidden });
+    }
+    if result.coverage.workers > 0 {
+        unobserved.push(Unobserved::Workers {
+            count: result.coverage.workers,
+        });
+    }
     ScenarioResult {
         file: file.to_path_buf(),
         after_instantiate: result.after_instantiate,
-        peak_memory: last,
+        peak_memory: peak,
         // The first run may fill caches and pools; growth is what the runs after it add.
-        growth_per_run: (later_runs > 0).then(|| (last - first) / later_runs),
+        warmup_growth: first.saturating_sub(result.after_instantiate),
+        growth_per_run: (later_runs > 0).then(|| last.saturating_sub(first) / later_runs),
         instantiate_ms: result.instantiate_ms,
         repeat: result.after_run.len() as u32,
         sha256: String::new(),
-        node: result.node.clone(),
+        node: result.node,
+        after_run: result.after_run,
+        memories: result.memories,
+        coverage: Coverage {
+            instances: result.coverage.instances,
+            unrelated_instances: result.coverage.unrelated,
+            unobserved,
+        },
     }
 }
 
@@ -341,26 +451,81 @@ mod tests {
             after_run: after_run.to_vec(),
             instantiate_ms: 1.0,
             node: "v22.0.0".to_string(),
+            memories: Vec::new(),
+            coverage: RunnerCoverage {
+                instances: 1,
+                unrelated: 0,
+                workers: 0,
+                per_instance: vec![1],
+            },
         }
     }
 
-    #[test]
-    fn the_peak_is_what_is_held_after_the_last_run() {
-        let summary = summarise(Path::new("s.mjs"), &result(&[100, 200, 300]));
-        assert_eq!(summary.peak_memory, 300);
+    fn summary(after_run: &[u64]) -> ScenarioResult {
+        summarise(Path::new("s.mjs"), result(after_run), 1)
     }
 
     #[test]
-    fn growth_ignores_the_first_run() {
-        let summary = summarise(Path::new("s.mjs"), &result(&[400, 400, 400]));
+    fn the_peak_is_the_highest_capacity_seen() {
+        assert_eq!(summary(&[100_000, 200_000, 300_000]).peak_memory, 300_000);
+        // A memory collected after the second run takes its capacity out of the sum.
+        assert_eq!(summary(&[100_000, 300_000, 100_000]).peak_memory, 300_000);
+    }
+
+    #[test]
+    fn steady_capacity_has_no_growth_at_all() {
+        let summary = summary(&[65_536, 65_536, 65_536]);
+        assert_eq!(summary.warmup_growth, 0);
         assert_eq!(summary.growth_per_run, Some(0));
-        let summary = summarise(Path::new("s.mjs"), &result(&[100, 200, 300, 400]));
+    }
+
+    #[test]
+    fn growth_in_the_warm_up_run_is_not_growth_per_run() {
+        let summary = summary(&[262_144, 262_144, 262_144]);
+        assert_eq!(summary.warmup_growth, 196_608);
+        assert_eq!(summary.growth_per_run, Some(0));
+    }
+
+    #[test]
+    fn growth_in_every_run_is_averaged_over_the_later_runs() {
+        assert_eq!(summary(&[100, 200, 300, 400]).growth_per_run, Some(100));
+    }
+
+    #[test]
+    fn growth_that_comes_late_is_averaged_not_lost() {
+        let summary = summary(&[100, 100, 100, 400]);
         assert_eq!(summary.growth_per_run, Some(100));
     }
 
     #[test]
     fn a_scenario_that_runs_once_has_no_growth() {
-        let summary = summarise(Path::new("s.mjs"), &result(&[100]));
-        assert_eq!(summary.growth_per_run, None);
+        assert_eq!(summary(&[100]).growth_per_run, None);
+    }
+
+    #[test]
+    fn a_declared_memory_nobody_exports_is_reported_as_not_observed() {
+        let mut observed = result(&[100, 100]);
+        observed.coverage.per_instance = vec![1, 1];
+        let summary = summarise(Path::new("s.mjs"), observed, 2);
+        assert_eq!(
+            summary.coverage.unobserved,
+            vec![Unobserved::InternalMemory { count: 2 }]
+        );
+    }
+
+    #[test]
+    fn started_workers_are_reported_as_not_observed() {
+        let mut observed = result(&[100, 100]);
+        observed.coverage.workers = 2;
+        let summary = summarise(Path::new("s.mjs"), observed, 1);
+        assert_eq!(
+            summary.coverage.unobserved,
+            vec![Unobserved::Workers { count: 2 }]
+        );
+    }
+
+    #[test]
+    fn full_coverage_reports_nothing_unobserved() {
+        assert_eq!(summary(&[100, 100]).coverage.unobserved, Vec::new());
     }
 }
