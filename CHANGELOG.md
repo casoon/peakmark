@@ -11,15 +11,27 @@ change the configuration, the baseline format or the output.
 - **Config:** `scenario_timeout` and a `timeout` per `[[scenario]]` set how long a scenario may
   run; the default is 60 seconds. Details:
   [Limits](https://casoon.github.io/peakmark/docs/reference/limits/#scenario-deadline).
+- **Baseline:** `check` reports removed and new scenarios, metrics no longer measured and
+  measurements that cannot be compared, as warnings with exit code 0 until the baseline is
+  accepted again. Details:
+  [Changed coverage](https://casoon.github.io/peakmark/docs/concepts/budget-and-baseline/#changed-coverage).
 
 ### Changed
 
+- **Baseline:** the format is version 2: memory per scenario plus the measurement contract.
+  Version 1 files are still read, any other version exits with 2, and `accept` writes the file
+  atomically. Details:
+  [Baseline format versions](https://casoon.github.io/peakmark/docs/concepts/budget-and-baseline/#baseline-format-versions).
+- **Config:** a module may list a scenario file only once.
 - **Size:** a component, or a module that uses a feature outside WebAssembly 3.0, is refused
   with exit code 2 instead of being measured. Details:
   [What is measured](https://casoon.github.io/peakmark/docs/concepts/measurements/#validation-comes-first).
 
 ### Fixed
 
+- **Baseline:** growth of one scenario is no longer hidden by a larger scenario of the same
+  module, and removing the scenarios and memory budgets no longer drops the memory coverage of
+  the baseline without a finding.
 - **Size:** the artifact is validated completely, function bodies included, before anything is
   measured; an invalid module exits with 2 instead of passing a size-only check.
 - **Scenarios:** a scenario that never returns, awaits a promise that never settles or prints

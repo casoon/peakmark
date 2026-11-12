@@ -35,6 +35,14 @@ it.
 
 Memory is counted in pages of 64 KiB.
 
+## Measurement contract
+
+`accept` records with the values what they were measured under: the measurement protocol and
+warm-up (the first run of a scenario is not counted in `growth_per_run`), the gzip and brotli
+settings, the Node version, the SHA-256 of the artifact, and per scenario the SHA-256 of its script
+and its `repeat`. Which of these decide whether a later check can compare against the baseline is
+described under [Budget and baseline](../budget-and-baseline/#what-can-still-be-compared).
+
 ## Reported, not gated
 
 `--json` also carries the memory the module declares, the size of its code, data and custom

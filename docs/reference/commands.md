@@ -51,5 +51,18 @@ It refuses a missing reason and a module that is over its budget.
 | `1` | over budget |
 | `2` | could not run |
 
-Findings carry a rule: `size/raw`, `size/gzip`, `size/brotli`, `mem/peak`, `mem/growth` and
-`baseline/missing`.
+Findings carry a rule: `size/raw`, `size/gzip`, `size/brotli`, `mem/peak`, `mem/growth`,
+`baseline/missing` and, for coverage that changed, `baseline/scenario-removed`,
+`baseline/scenario-new`, `baseline/metric-missing`, `baseline/incomparable` and `baseline/runtime`;
+see [Budget and baseline](../../concepts/budget-and-baseline/#changed-coverage). Only a metric over
+its budget exits with `1`. Growth, a missing baseline and changed coverage are warnings: exit code
+`0`, verdict `warning`. An unsupported baseline format exits with `2`.
+
+## JSON
+
+`--json` prints one document: `verdict` (`passed`, `warning` or `failed`) and `modules`. Each module
+has its `values`, `budget`, `baseline` (the accepted module values), `baseline_scenarios` and
+`baseline_contract` (`null` for a baseline from format 1 or none), the `scenarios` measured
+(with `repeat`, `sha256` and `node`), the `issues` that are over budget or past the baseline, and
+`changes`: one object per finding about coverage, with its `rule`, a `level` of `warning` or `note`
+and the `detail` of what changed.

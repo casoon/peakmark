@@ -54,7 +54,7 @@ Sizes take `B`, `kB`, `MB`, `KiB` or `MiB`; a plain number is bytes. A `peak_mem
 | Key | Meaning |
 |---|---|
 | `module` | the module it drives |
-| `file` | the ES module, see [Writing a scenario](../../guides/scenarios/) |
+| `file` | the ES module, see [Writing a scenario](../../guides/scenarios/); once per module, because it is the scenario's identity in the baseline |
 | `repeat` | how often the function runs, `1` by default, at least `1` |
 | `timeout` | optional: this scenario's deadline, replacing `scenario_timeout`; see [Limits](../limits/#scenario-deadline) |
 

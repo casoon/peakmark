@@ -16,14 +16,15 @@ src/
 ├── lib.rs         crate documentation and the module list
 ├── cli/           arguments (args.rs), commands (commands.rs), exit codes (mod.rs)
 ├── config.rs      peakmark.toml: modules, budgets, scenarios, validation
-├── baseline.rs    peakmark.baseline.json and the history log
+├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values, contract) and the history log
 ├── measure.rs     one module in, one Measured out
 ├── wasm.rs        validation, sections and declared memory, read with wasmparser
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory it held
-├── check.rs       budget and baseline against the measured values: Issue, Level, verdict
+├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
 ├── report/        text report (text.rs) and JSON (json.rs)
 ├── metric.rs      Metric and Values: the five gated values
+├── digest.rs      SHA-256 of artifacts and scenario scripts
 ├── units.rs       "258 kB" in, "257.1 kB" out
 ├── date.rs        today's date without a date library
 └── error.rs       Error and UsageError
@@ -42,12 +43,16 @@ tests/
    sections and declared memory, `compress` for the gzip and brotli length, and `runner` for the
    memory after each scenario. The result is a `Measured`.
 4. `check::evaluate` judges every value: over the budget is an error, past the baseline by more than
-   the tolerance is a warning.
+   the tolerance is a warning. Budgets judge the module-wide values; the baseline judges size per
+   module and memory per scenario. Where the baseline and the measurement no longer line up
+   (a scenario removed or new, a metric no longer measured, a measurement that cannot be compared)
+   it records a `Change` instead of a number.
 5. `report::report` or `report::json` turns the results into the output; `check::verdict` decides
    the exit code.
 
 `peakmark accept` runs steps 1 to 3 for the chosen modules, refuses a module that is over its
-budget, then `baseline::save` and `baseline::append_history` store the values and the reason.
+budget, then `baseline::save` and `baseline::append_history` store the entry (`Entry::from_measured`:
+module values, per-scenario values, contract) and the reason.
 
 ## Responsibilities
 
@@ -57,6 +62,9 @@ budget, then `baseline::save` and `baseline::append_history` store the values an
   and does not make its own.
 - **Only `error` owns message text.** Modules return `Error` variants that carry the path or name
   involved; `Display` renders the sentence the command prints. Exit code 2 always means an `Error`.
+- **Only `baseline` knows the file format.** It reads versions 1 and 2, writes 2, refuses others
+  with `Error::BaselineVersion`, and replaces the file atomically. An entry from version 1 has no
+  `contract` and no `scenarios`; `check` treats that as "compare the module values", never as zero.
 - **Formats stay put.** The shapes of `peakmark.toml`, the baseline file, the history log and
   `--json` are public; changing them is a user-facing change.
 
