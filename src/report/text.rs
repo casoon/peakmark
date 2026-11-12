@@ -116,15 +116,15 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
 /// The findings of one module; `None` if there are none.
 fn module_group(result: &ModuleResult) -> Option<FindingGroup> {
     let mut group = FindingGroup::new(&result.module.name);
-    for issue in &result.issues {
-        group = group.add_finding(finding(issue));
-    }
     for violation in &result.violations {
         group = group.add_finding(
             Finding::new(Tone::Error, violation.message())
                 .with_rule_id(violation.rule())
                 .with_remedy(violation.action()),
         );
+    }
+    for issue in &result.issues {
+        group = group.add_finding(finding(issue));
     }
     for change in &result.changes {
         group = group.add_finding(change_finding(change));

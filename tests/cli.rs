@@ -1018,3 +1018,247 @@ fn json_carries_a_versioned_inventory() {
     assert_eq!(inventory["names"]["status"], "absent");
     assert_eq!(inventory["coverage"]["complete"], true);
 }
+
+// Interface and feature drift against the accepted inventory, and the module policy.
+
+const ACCEPTED_INTERFACE: &str = r#"(module
+    (import "env" "log" (func (param i32)))
+    (memory (export "memory") 1 4)
+    (func (export "add") (param i32 i32) (result i32) local.get 0))"#;
+
+/// A project without scenarios whose accepted module is `ACCEPTED_INTERFACE`. The
+/// tolerance is wide so that the size of the variants does not add findings.
+fn accepted_interface(name: &str, policy: &str) -> Project {
+    let project = Project::new(name, &format!("tolerance = \"1000%\"\n{SIZE_ONLY}{policy}"));
+    project.write("fixture.wasm", wat::parse_str(ACCEPTED_INTERFACE).unwrap());
+    let accept = project.run(&["accept", "--all", "--reason", "first"]);
+    assert_eq!(accept.code, 0, "{}", accept.stderr);
+    project
+}
+
+fn change_to(project: &Project, wat: &str) {
+    project.write("fixture.wasm", wat::parse_str(wat).unwrap());
+}
+
+fn changes(run: &Run) -> Vec<serde_json::Value> {
+    let document: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    document["modules"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn the_accepted_inventory_is_stored_and_an_unchanged_module_stays_quiet() {
+    let project = accepted_interface("drift-stored", "");
+
+    let saved = baseline_json(&project);
+    let inventory = &saved["modules"]["fixture"]["inventory"];
+    assert_eq!(inventory["imports"][0]["module"], "env");
+    assert_eq!(inventory["exports"][0]["name"], "add");
+    assert_eq!(inventory["exports"][0]["type"], "(i32, i32) -> i32");
+    assert_eq!(inventory["exports"][1]["type"], "1..4");
+
+    let run = project.run(&["check"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "peakmark check: 1 module within budget and baseline",
+    );
+}
+
+#[test]
+fn a_reordered_module_is_not_a_difference() {
+    let project = accepted_interface("drift-reordered", "");
+    change_to(
+        &project,
+        r#"(module
+            (import "env" "log" (func (param i32)))
+            (func (export "add") (param i32 i32) (result i32) local.get 0)
+            (memory (export "memory") 1 4))"#,
+    );
+
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "within budget and baseline");
+}
+
+#[test]
+fn a_new_host_import_is_a_warning_with_the_exact_declaration() {
+    let project = accepted_interface("drift-import", "");
+    change_to(
+        &project,
+        r#"(module
+            (import "env" "log" (func (param i32)))
+            (import "env" "fetch" (func (param i32) (result i32)))
+            (memory (export "memory") 1 4)
+            (func (export "add") (param i32 i32) (result i32) local.get 0))"#,
+    );
+
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "baseline no longer matches: fixture");
+    assert_contains(
+        &run.stdout,
+        "Import env.fetch func (i32) -> i32 was added; the host must provide one more binding",
+    );
+    assert_contains(&run.stdout, "[baseline/interface-added]");
+    assert_contains(&run.stdout, "peakmark accept fixture --reason");
+}
+
+#[test]
+fn a_changed_export_signature_shows_before_and_after_in_json() {
+    let project = accepted_interface("drift-export", "");
+    change_to(
+        &project,
+        r#"(module
+            (import "env" "log" (func (param i32)))
+            (memory (export "memory") 1 4)
+            (func (export "add") (param i64 i64) (result i64) local.get 0))"#,
+    );
+
+    let text = project.run(&["check"]);
+    assert_eq!(text.code, 0, "{}", text.stderr);
+    assert_contains(
+        &text.stdout,
+        "Export add changed: func (i32, i32) -> i32 was, (i64, i64) -> i64 now",
+    );
+
+    let changes = changes(&project.run(&["check", "--json"]));
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["rule"], "baseline/interface-changed");
+    assert_eq!(changes[0]["level"], "warning");
+    assert_eq!(changes[0]["detail"]["part"], "export");
+    assert_eq!(changes[0]["detail"]["name"], "add");
+    assert_eq!(changes[0]["detail"]["was"], "(i32, i32) -> i32");
+    assert_eq!(changes[0]["detail"]["now"], "(i64, i64) -> i64");
+}
+
+#[test]
+fn a_new_threads_requirement_is_a_changed_limit_and_a_new_feature() {
+    let project = accepted_interface("drift-threads", "");
+    change_to(
+        &project,
+        r#"(module
+            (import "env" "log" (func (param i32)))
+            (memory (export "memory") 1 4 shared)
+            (func (export "add") (param i32 i32) (result i32) local.get 0))"#,
+    );
+
+    let changes = changes(&project.run(&["check", "--json"]));
+
+    let rules: Vec<_> = changes
+        .iter()
+        .map(|c| c["rule"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        rules,
+        ["baseline/interface-changed", "baseline/feature-added"]
+    );
+    assert_eq!(changes[0]["detail"]["was"], "1..4");
+    assert_eq!(changes[0]["detail"]["now"], "1..4 shared");
+    assert_eq!(changes[1]["detail"]["feature"], "shared_memory");
+}
+
+#[test]
+fn an_entry_accepted_before_the_inventory_was_kept_only_notes_it() {
+    let project = accepted_interface("drift-old-entry", "");
+    let mut saved = baseline_json(&project);
+    saved["modules"]["fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("inventory");
+    project.write("peakmark.baseline.json", saved.to_string());
+
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "[baseline/inventory-missing]");
+    assert_contains(&run.stdout, "within budget and baseline");
+}
+
+const POLICY: &str = r#"
+[module.policy]
+require_exports = [{ name = "add", signature = "(i32, i32) -> i32" }]
+allow_imports = [{ module = "env", name = "log", signature = "(i32) -> ()" }]
+allow_features = []
+"#;
+
+#[test]
+fn a_module_within_its_policy_passes() {
+    let project = accepted_interface("policy-ok", POLICY);
+
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "within budget and baseline");
+}
+
+#[test]
+fn a_policy_violation_fails_names_the_declaration_and_survives_accept() {
+    let project = accepted_interface("policy-violated", POLICY);
+    change_to(
+        &project,
+        r#"(module
+            (import "env" "log" (func (param i32)))
+            (import "env" "fetch" (func (param i32) (result i32)))
+            (memory (export "memory") 1 4 shared)
+            (func (export "add") (param i64 i64) (result i64) local.get 0))"#,
+    );
+
+    let run = project.run(&["check"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert_contains(&run.stdout, "peakmark check: policy broken: fixture");
+    assert_contains(
+        &run.stdout,
+        "Export add is func (i64, i64) -> i64, the policy requires func (i32, i32) -> i32",
+    );
+    assert_contains(&run.stdout, "[policy/export-signature]");
+    assert_contains(
+        &run.stdout,
+        "Import env.fetch (func (i32) -> i32) is not in allow_imports",
+    );
+    assert_contains(&run.stdout, "[policy/import-not-allowed]");
+    assert_contains(&run.stdout, "shared_memory");
+    assert_contains(&run.stdout, "does not waive it");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&project.run(&["check", "--json"]).stdout).unwrap();
+    assert_eq!(json["verdict"], "failed");
+    let violations = json["modules"][0]["violations"].as_array().unwrap();
+    assert_eq!(violations[0]["rule"], "policy/export-signature");
+    assert_eq!(violations[0]["level"], "error");
+    assert_eq!(violations[0]["detail"]["name"], "add");
+    assert_eq!(violations[0]["detail"]["found"], "func (i64, i64) -> i64");
+    assert!(
+        violations[0]["action"]
+            .as_str()
+            .unwrap()
+            .contains("require_exports")
+    );
+
+    let accept = project.run(&["accept", "fixture", "--reason", "try to waive"]);
+    assert_eq!(accept.code, 2);
+    assert_contains(&accept.stderr, "breaks its policy");
+    assert_eq!(project.run(&["check"]).code, 1);
+}
+
+#[test]
+fn a_missing_required_export_fails() {
+    let project = accepted_interface("policy-missing-export", POLICY);
+    change_to(
+        &project,
+        r#"(module (import "env" "log" (func (param i32))) (memory (export "memory") 1 4))"#,
+    );
+
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "Required export add (i32, i32) -> i32 is missing",
+    );
+    assert_contains(&run.stdout, "[policy/export-missing]");
+}

@@ -207,3 +207,36 @@ fn a_feature_outside_the_supported_set_fails_instead_of_being_left_out() {
         Err(InspectError::UnsupportedFeature(_))
     ));
 }
+
+#[test]
+fn drift_and_policy_come_from_the_inventory_of_the_measured_file() {
+    use peakmark::check::Change;
+
+    let text = format!(
+        "{MODULE}[module.policy]\nallow_imports = []\nallow_features = [\"bulk_memory\"]\n"
+    );
+    let dir = project("lib-policy", &text, 1);
+    let config = config::load(&dir.join("peakmark.toml")).unwrap();
+    let accepted = measure(&config, &config.modules[0]).unwrap();
+    let entry = baseline::Entry::from_measured(&accepted, "test");
+    assert!(entry.inventory.is_some());
+
+    let changed = wat::parse_str(
+        r#"(module (import "env" "f" (func)) (memory 2)
+            (func i32.const 0 i32.const 0 i32.const 0 memory.fill))"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("fixture.wasm"), changed).unwrap();
+    let now = measure(&config, &config.modules[0]).unwrap();
+
+    let result = evaluate(&config.modules[0], now, Some(&entry), config.tolerance);
+
+    assert!(result.violated());
+    assert_eq!(result.violations[0].rule(), "policy/import-not-allowed");
+    assert!(
+        result
+            .changes
+            .iter()
+            .any(|change| matches!(change, Change::Interface(_)))
+    );
+}
