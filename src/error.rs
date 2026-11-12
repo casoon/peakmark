@@ -5,8 +5,10 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::config::ConfigError;
+use crate::units::format_duration;
 
 /// Everything that stops peakmark from producing a verdict.
 ///
@@ -71,8 +73,26 @@ pub enum Error {
     ScenarioFailed {
         /// The scenario file as configured.
         scenario: PathBuf,
-        /// What the scenario wrote to stderr.
+        /// The end of what the scenario wrote to stderr.
         stderr: String,
+    },
+    /// A scenario did not finish within its deadline and was stopped.
+    ScenarioTimeout {
+        /// The module the scenario drives.
+        module: String,
+        /// The scenario file as configured.
+        scenario: PathBuf,
+        /// The deadline that passed.
+        timeout: Duration,
+        /// The end of what the scenario wrote to stderr before it was stopped.
+        stderr: String,
+    },
+    /// Waiting for a scenario's Node process failed.
+    ScenarioWait {
+        /// The scenario file as configured.
+        scenario: PathBuf,
+        /// The cause.
+        source: std::io::Error,
     },
     /// A scenario finished without printing a result.
     ScenarioNoResult {
@@ -171,6 +191,29 @@ impl fmt::Display for Error {
                     stderr.trim()
                 )
             }
+            Self::ScenarioTimeout {
+                module,
+                scenario,
+                timeout,
+                stderr,
+            } => {
+                write!(
+                    f,
+                    "scenario {} of module `{module}` did not finish within {} and was stopped; \
+                     raise `timeout` of the scenario or `scenario_timeout` if it needs longer",
+                    scenario.display(),
+                    format_duration(*timeout)
+                )?;
+                if !stderr.trim().is_empty() {
+                    write!(f, "\nstderr: {}", stderr.trim())?;
+                }
+                Ok(())
+            }
+            Self::ScenarioWait { scenario, source } => write!(
+                f,
+                "cannot wait for scenario {}: {source}",
+                scenario.display()
+            ),
             Self::ScenarioNoResult { scenario } => {
                 write!(f, "scenario {} ended without a result", scenario.display())
             }
@@ -198,7 +241,8 @@ impl std::error::Error for Error {
             Self::Read { source, .. }
             | Self::Write { source, .. }
             | Self::Resolve { source, .. }
-            | Self::NodeStart(source) => Some(source),
+            | Self::NodeStart(source)
+            | Self::ScenarioWait { source, .. } => Some(source),
             Self::ConfigSyntax { source, .. } => Some(source),
             Self::Config { source, .. } => Some(source),
             Self::BaselineSyntax { source, .. } | Self::ScenarioUnreadable { source, .. } => {
@@ -206,6 +250,7 @@ impl std::error::Error for Error {
             }
             Self::InvalidModule { source, .. } => Some(source),
             Self::ScenarioFailed { .. }
+            | Self::ScenarioTimeout { .. }
             | Self::ScenarioNoResult { .. }
             | Self::UnknownModule { .. }
             | Self::OverBudget { .. } => None,
