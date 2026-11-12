@@ -12,6 +12,20 @@ order: 1
 | `peak_memory` | `mem/peak` | linear memory held after the last run of a scenario |
 | `growth_per_run` | `mem/growth` | what each run after the first adds, averaged |
 
+## Validation comes first
+
+Before any value is measured, peakmark validates the whole artifact with wasmparser's validator,
+function bodies included. An artifact that does not validate stops the check with exit code 2 and
+an error naming the file; nothing is measured, and Node is not started. Validation does not
+certify anything about the module's security.
+
+Only core modules are measured, with the features of WebAssembly 3.0 (bulk memory, reference
+types, SIMD, threads, exception handling, multiple and 64-bit memories, tail calls, GC and the
+rest of that release). Two cases are told apart from an invalid binary:
+
+- a module that is valid but uses a feature outside that set, such as a custom page size;
+- a WebAssembly component, which is refused rather than measured as one module.
+
 ## Why memory
 
 Linear memory only grows. A module that once needed 30 MiB holds 30 MiB for as long as the instance

@@ -18,7 +18,7 @@ src/
 ├── config.rs      peakmark.toml: modules, budgets, scenarios, validation
 ├── baseline.rs    peakmark.baseline.json and the history log
 ├── measure.rs     one module in, one Measured out
-├── wasm.rs        sections and declared memory, read with wasmparser
+├── wasm.rs        validation, sections and declared memory, read with wasmparser
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) and reads the memory it held
 ├── check.rs       budget and baseline against the measured values: Issue, Level, verdict

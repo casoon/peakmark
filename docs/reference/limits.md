@@ -10,4 +10,6 @@ order: 3
   crosses a page; raise `repeat` to see it.
 - A memory the module imports instead of exporting is not seen.
 - Scenarios run in Node, not in a browser: DOM and layout are not part of the measurement.
+- Only core modules are measured. A component is refused with exit code 2, as is a module that
+  uses a feature outside WebAssembly 3.0.
 - peakmark measures finished artifacts and does not build them.
