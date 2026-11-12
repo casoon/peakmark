@@ -8,7 +8,7 @@ repository = "https://github.com/casoon/peakmark"
 readme = "README.md"
 keywords = ["wasm", "webassembly", "memory", "size", "budget"]
 categories = ["command-line-utilities", "wasm", "development-tools"]
-exclude = ["plan/**"]
+exclude = ["plan/**", "site/**", "docs/**", "examples/**", ".github/**"]
 
 # brotli at quality 11 takes minutes per megabyte when it is not optimised,
 # so the dependencies are optimised in debug builds too.

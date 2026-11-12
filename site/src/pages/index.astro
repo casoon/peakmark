@@ -1,0 +1,104 @@
+---
+import {
+  BuildOutput,
+  CallToAction,
+  Facts,
+  Faq,
+  Features,
+  Flow,
+  Hero,
+  Install,
+  Badges,
+  Badge,
+  Terminal,
+} from '@casoon/pages-theme/components';
+import Base from '@casoon/pages-theme/layouts/Base.astro';
+import { url } from '@casoon/pages-theme/url';
+import check from '../../../examples/check.ansi?raw';
+import hero from '../../../examples/no-baseline.ansi?raw';
+---
+
+<Base>
+  <Hero
+    title="A budget for what your WebAssembly module costs."
+    lead="peakmark measures a built .wasm module — its size on disk and on the wire, and the memory it holds after a scenario — and fails the check when it grows past a budget you set."
+  >
+    <Install commands={[{ label: 'cargo', command: 'cargo install peakmark' }]} />
+    <Badges>
+      <Badge>MIT</Badge>
+      <Badge>for wasm-bindgen modules</Badge>
+    </Badges>
+    <Terminal slot="output" title="peakmark check" dots ansi={hero} />
+  </Hero>
+
+  <Facts
+    items={[
+      { value: '5', label: 'values measured per module' },
+      { value: '2', label: 'commands: check and accept' },
+      { value: '3', label: 'files in the repository: budget, baseline, history' },
+    ]}
+  />
+
+  <Features
+    items={[
+      {
+        title: 'Memory from the instance',
+        body: 'Linear memory only grows, so the peak is what counts. peakmark reads it from the module itself after a scenario, not from the process around it.',
+      },
+      {
+        title: 'A limit and a last-accepted value',
+        body: 'Over the budget, the check fails. Past the baseline, it warns and names the command that accepts the growth on purpose.',
+      },
+      {
+        title: 'Growth with a reason',
+        body: 'Accepting a baseline needs a reason, and the reason is logged next to it. Growth shows up in review as a decision, not as drift.',
+      },
+      {
+        title: 'Releases you can verify',
+        body: 'Binaries are built by the release workflow, with checksums and signed build provenance you can check yourself.',
+      },
+    ]}
+  />
+
+  <Flow
+    eyebrow="How a check runs"
+    title="Build it your way, gate it with peakmark."
+    lead="peakmark measures **finished artifacts**. Building the module stays in your own pipeline."
+    stages={[
+      { label: 'Build', artifact: 'engine_bg.wasm', title: 'Produce the module', body: 'wasm-bindgen and wasm-opt as before.' },
+      { label: 'Run', artifact: 'bench/pivot.mjs', title: 'Drive it in Node', body: 'A scenario loads data and runs the operations a page would.' },
+      { label: 'Compare', artifact: 'peakmark check', title: 'Budget and baseline', body: 'Exit code 1 over the budget, a warning past the baseline.' },
+      { label: 'Accept', artifact: 'peakmark accept', title: 'Growth on purpose', body: 'New baseline, with the reason in the history.' },
+    ]}
+  />
+
+  <BuildOutput
+    caption="The engine module of opengrid, measured by peakmark. Recorded output, not a mock-up."
+    file="examples/check.ansi"
+  >
+    <Terminal ansi={check} />
+  </BuildOutput>
+
+  <Faq
+    items={[
+      {
+        q: 'Does peakmark build or optimise my module?',
+        a: 'No. It measures the artifact you give it. Building and optimising stay in your own pipeline.',
+      },
+      {
+        q: 'Do I need Node?',
+        a: 'Only for scenarios, which run in Node. A configuration without scenarios measures sizes and needs no Node.',
+      },
+      {
+        q: 'Why does the brotli size differ slightly from another tool?',
+        a: 'peakmark uses a Rust brotli encoder, which lands about 0.1 % above the reference on the same settings. Set budgets from peakmark’s own numbers.',
+      },
+    ]}
+  />
+
+  <CallToAction
+    title="Gate your first module in a few minutes."
+    href={url('docs/getting-started/quickstart/')}
+    label="Read the quickstart"
+  />
+</Base>

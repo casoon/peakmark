@@ -1,0 +1,6 @@
+[1;92m✔[0m peakmark check: 1 module within budget and baseline
+
+  [2mModules: [0m[36m1[0m   [2mOver budget: [0m[36m0[0m   [2mGrown: [0m[36m0[0m
+
+● [1;96mMeasured[0m [2m(1)[0m
+  - [36mengine: raw size 463.8 kB, gzip size 195.8 kB, brotli size 159.2 kB, peak memory 23.6 MiB, memory growth per run 0 B[0m

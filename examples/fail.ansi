@@ -1,0 +1,9 @@
+[1;91m✖[0m peakmark check: over budget: engine
+
+  [2mModules: [0m[36m1[0m   [2mOver budget: [0m[1;91m1[0m   [2mGrown: [0m[36m0[0m
+
+● [1;96mengine[0m [2m(1)[0m
+  - [1;91mPeak memory 23.6 MiB, budget 20.0 MiB[0m [2m[mem/peak][0m at [2mbench/pivot.mjs[0m
+
+[1;96mNext steps:[0m
+  • Shrink the module, or raise its budget in the configuration on purpose
