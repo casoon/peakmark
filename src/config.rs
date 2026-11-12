@@ -2,12 +2,13 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Deserialize;
 
 use crate::error::Error;
 use crate::metric::Values;
-use crate::units::{ParseError, parse_bytes, parse_percent};
+use crate::units::{ParseError, parse_bytes, parse_duration, parse_percent};
 
 /// A parsed `peakmark.toml`.
 #[derive(Debug)]
@@ -42,12 +43,19 @@ pub struct Scenario {
     pub file: PathBuf,
     /// How often the script runs on one instance.
     pub repeat: u32,
+    /// How long the whole scenario may take, from starting Node to its result.
+    pub timeout: Duration,
 }
+
+/// The deadline of a scenario that sets none and whose configuration sets no
+/// `scenario_timeout`.
+pub const DEFAULT_SCENARIO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     tolerance: Option<String>,
+    scenario_timeout: Option<String>,
     #[serde(default, rename = "module")]
     modules: Vec<RawModule>,
     #[serde(default, rename = "scenario")]
@@ -81,6 +89,7 @@ struct RawScenario {
     file: PathBuf,
     #[serde(default = "one")]
     repeat: u32,
+    timeout: Option<String>,
 }
 
 fn one() -> u32 {
@@ -98,6 +107,8 @@ pub enum ConfigError {
     Value(ParseError),
     /// A scenario runs zero times.
     ZeroRepeat(PathBuf),
+    /// A scenario or `scenario_timeout` allows no time at all.
+    ZeroTimeout(String),
     /// A scenario names a module that is not configured.
     UnknownScenarioModule {
         /// The scenario script.
@@ -118,6 +129,7 @@ impl fmt::Display for ConfigError {
             Self::DuplicateModule(name) => write!(f, "module `{name}` is configured twice"),
             Self::Value(error) => error.fmt(f),
             Self::ZeroRepeat(file) => write!(f, "scenario {} has repeat = 0", file.display()),
+            Self::ZeroTimeout(what) => write!(f, "{what} has a timeout of zero"),
             Self::UnknownScenarioModule { file, module } => write!(
                 f,
                 "scenario {} names the unknown module `{module}`",
@@ -183,6 +195,15 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, ConfigError> {
         Some(text) => parse_percent(text)?,
         None => 0.01,
     };
+    let deadline = |text: &Option<String>, what: &dyn Fn() -> String| {
+        let timeout = text.as_deref().map(parse_duration).transpose()?;
+        if timeout == Some(Duration::ZERO) {
+            return Err(ConfigError::ZeroTimeout(what()));
+        }
+        Ok(timeout)
+    };
+    let default_timeout = deadline(&raw.scenario_timeout, &|| "scenario_timeout".to_string())?
+        .unwrap_or(DEFAULT_SCENARIO_TIMEOUT);
 
     let mut modules: Vec<Module> = Vec::new();
     for module in raw.modules {
@@ -219,9 +240,14 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, ConfigError> {
                 module: scenario.module,
             });
         };
+        let timeout = deadline(&scenario.timeout, &|| {
+            format!("scenario {}", scenario.file.display())
+        })?
+        .unwrap_or(default_timeout);
         module.scenarios.push(Scenario {
             file: scenario.file,
             repeat: scenario.repeat,
+            timeout,
         });
     }
 
@@ -333,6 +359,47 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(never, ConfigError::ZeroRepeat(PathBuf::from("s.mjs")));
+    }
+
+    #[test]
+    fn a_scenario_deadline_defaults_to_the_configured_one_and_can_be_overridden() {
+        let module = "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n";
+        let scenarios = "[[scenario]]\nmodule = 'a'\nfile = 'x.mjs'\n\
+                         [[scenario]]\nmodule = 'a'\nfile = 'y.mjs'\ntimeout = '5s'";
+
+        let config = parse(&format!("{module}{scenarios}")).unwrap();
+        assert_eq!(
+            config.modules[0].scenarios[0].timeout,
+            DEFAULT_SCENARIO_TIMEOUT
+        );
+        assert_eq!(
+            config.modules[0].scenarios[1].timeout,
+            Duration::from_secs(5)
+        );
+
+        let config = parse(&format!("scenario_timeout = '2m'\n{module}{scenarios}")).unwrap();
+        assert_eq!(
+            config.modules[0].scenarios[0].timeout,
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            config.modules[0].scenarios[1].timeout,
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn refuses_a_deadline_of_zero_and_one_that_is_not_a_duration() {
+        let module = "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n";
+        let zero = parse(&format!("scenario_timeout = '0s'\n{module}")).unwrap_err();
+        assert_eq!(
+            zero,
+            ConfigError::ZeroTimeout("scenario_timeout".to_string())
+        );
+
+        let text = format!("{module}[[scenario]]\nmodule = 'a'\nfile = 's.mjs'\ntimeout = 'soon'");
+        let error = parse(&text).unwrap_err();
+        assert!(error.to_string().contains("not a duration"), "{error}");
     }
 
     #[test]

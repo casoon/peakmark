@@ -1,7 +1,8 @@
-//! Sizes and percentages as written in the configuration and as printed in
+//! Sizes, durations and percentages as written in the configuration and as printed in
 //! reports.
 
 use std::fmt;
+use std::time::Duration;
 
 /// A size or percentage that does not parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +18,8 @@ pub enum ParseError {
     },
     /// The text is not a number followed by `%`.
     NotAPercentage(String),
+    /// The text is not a number followed by `ms`, `s` or `m`.
+    NotADuration(String),
 }
 
 impl fmt::Display for ParseError {
@@ -29,6 +32,12 @@ impl fmt::Display for ParseError {
             ),
             Self::NotAPercentage(text) => {
                 write!(f, "`{text}` is not a percentage such as `1%`")
+            }
+            Self::NotADuration(text) => {
+                write!(
+                    f,
+                    "`{text}` is not a duration such as `500ms`, `30s` or `2m`"
+                )
             }
         }
     }
@@ -81,6 +90,43 @@ pub fn parse_percent(text: &str) -> Result<f64, ParseError> {
         .ok_or_else(|| ParseError::NotAPercentage(text.to_string()))
 }
 
+/// Reads `500ms`, `30s` or `2m`.
+///
+/// # Errors
+///
+/// Fails if the text is not a number followed by `ms`, `s` or `m`.
+pub fn parse_duration(text: &str) -> Result<Duration, ParseError> {
+    let trimmed = text.trim();
+    let split = trimmed
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(trimmed.len());
+    let (number, unit) = trimmed.split_at(split);
+    let seconds_per_unit = match unit.trim() {
+        "ms" => 0.001,
+        "s" => 1.0,
+        "m" => 60.0,
+        _ => return Err(ParseError::NotADuration(text.to_string())),
+    };
+    number
+        .parse::<f64>()
+        .ok()
+        .and_then(|number| Duration::try_from_secs_f64(number * seconds_per_unit).ok())
+        .ok_or_else(|| ParseError::NotADuration(text.to_string()))
+}
+
+/// A duration in the unit it was most likely written in: `500ms`, `30s`, `2m`.
+#[must_use]
+pub fn format_duration(duration: Duration) -> String {
+    let millis = duration.as_millis();
+    if millis % 60_000 == 0 {
+        format!("{}m", millis / 60_000)
+    } else if millis % 1000 == 0 {
+        format!("{}s", millis / 1000)
+    } else {
+        format!("{millis}ms")
+    }
+}
+
 /// Bytes in decimal units: `812 B`, `257.1 kB`, `1.24 MB`.
 #[must_use]
 pub fn format_decimal(bytes: u64) -> String {
@@ -129,6 +175,23 @@ mod tests {
     fn parses_a_percentage() {
         assert_eq!(parse_percent("1%"), Ok(0.01));
         assert!(parse_percent("1").is_err());
+    }
+
+    #[test]
+    fn parses_durations() {
+        assert_eq!(parse_duration("500ms"), Ok(Duration::from_millis(500)));
+        assert_eq!(parse_duration("30s"), Ok(Duration::from_secs(30)));
+        assert_eq!(parse_duration("2 m"), Ok(Duration::from_secs(120)));
+        assert_eq!(parse_duration("1.5s"), Ok(Duration::from_millis(1500)));
+        assert!(parse_duration("30").is_err());
+        assert!(parse_duration("soon").is_err());
+    }
+
+    #[test]
+    fn formats_durations() {
+        assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
+        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(format_duration(Duration::from_secs(120)), "2m");
     }
 
     #[test]
