@@ -292,3 +292,55 @@ fn help_and_version_print_to_stdout() {
         concat!("peakmark ", env!("CARGO_PKG_VERSION")),
     );
 }
+
+/// `drop` on an empty stack: every section parses, the function body does not type.
+const DROP_ON_EMPTY_STACK: &str = "0061736d01000000010401600000030201000a050103001a0b";
+
+/// A module with a raw-size budget and no scenario, so no Node is involved.
+const SIZE_ONLY: &str = r#"[[module]]
+name = "fixture"
+artifact = "fixture.wasm"
+
+[module.budget]
+raw = "1 MB"
+"#;
+
+fn from_hex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_function_body_that_does_not_type_exits_with_2_without_node_or_scenarios() {
+    let project = Project::new("invalid-body", SIZE_ONLY);
+    project.write("fixture.wasm", from_hex(DROP_ON_EMPTY_STACK));
+    let run = project.run(&["check", "--json"]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_contains(
+        &run.stderr,
+        "fixture.wasm is not a valid WebAssembly module",
+    );
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn a_component_exits_with_2_instead_of_reporting_sizes() {
+    let project = Project::new("component", SIZE_ONLY);
+    project.write("fixture.wasm", wat::parse_str("(component)").unwrap());
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_contains(&run.stderr, "is a WebAssembly component");
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn a_valid_module_without_a_scenario_still_passes() {
+    let project = Project::new("size-only", SIZE_ONLY);
+    let run = project.run(&["check"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+}

@@ -120,3 +120,39 @@ fn an_artifact_that_is_not_webassembly_is_an_invalid_module() {
         "{error}"
     );
 }
+
+#[test]
+fn a_function_body_that_does_not_type_is_an_invalid_module() {
+    let dir = project("lib-body", MODULE, 1);
+    // `drop` on an empty stack: every section parses, the function body does not type.
+    let hex = "0061736d01000000010401600000030201000a050103001a0b";
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    std::fs::write(dir.join("fixture.wasm"), bytes).unwrap();
+    let config = config::load(&dir.join("peakmark.toml")).unwrap();
+
+    let error = measure(&config, &config.modules[0]).err().unwrap();
+
+    assert!(matches!(error, Error::InvalidModule { .. }), "{error}");
+}
+
+#[test]
+fn a_component_and_an_unsupported_feature_are_told_apart_from_an_invalid_module() {
+    let dir = project("lib-kinds", MODULE, 1);
+    let config = config::load(&dir.join("peakmark.toml")).unwrap();
+
+    let component = wat::parse_str("(component)").unwrap();
+    std::fs::write(dir.join("fixture.wasm"), component).unwrap();
+    let error = measure(&config, &config.modules[0]).err().unwrap();
+    assert!(
+        matches!(error, Error::UnsupportedComponent { .. }),
+        "{error}"
+    );
+
+    let paged = wat::parse_str("(module (memory 1 (pagesize 1)))").unwrap();
+    std::fs::write(dir.join("fixture.wasm"), paged).unwrap();
+    let error = measure(&config, &config.modules[0]).err().unwrap();
+    assert!(matches!(error, Error::UnsupportedFeature { .. }), "{error}");
+}

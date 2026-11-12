@@ -8,7 +8,7 @@ use crate::config::{Config, Module};
 use crate::error::Error;
 use crate::metric::{Metric, Values};
 use crate::runner::{ScenarioResult, run_scenario};
-use crate::wasm::{Sections, inspect};
+use crate::wasm::{InspectError, Sections, inspect};
 
 /// Everything measured about one module.
 pub struct Measured {
@@ -47,7 +47,11 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         path: path.clone(),
         source,
     })?;
-    let inspection = inspect(&bytes).map_err(|source| Error::InvalidModule { path, source })?;
+    let inspection = inspect(&bytes).map_err(|error| match error {
+        InspectError::Invalid(source) => Error::InvalidModule { path, source },
+        InspectError::UnsupportedFeature(source) => Error::UnsupportedFeature { path, source },
+        InspectError::Component => Error::UnsupportedComponent { path },
+    })?;
 
     let mut scenarios = Vec::new();
     for scenario in &module.scenarios {

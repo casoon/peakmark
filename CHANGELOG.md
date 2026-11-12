@@ -6,6 +6,17 @@ change the configuration, the baseline format or the output.
 
 ## [Unreleased]
 
+### Changed
+
+- **Size:** a component, or a module that uses a feature outside WebAssembly 3.0, is refused
+  with exit code 2 instead of being measured. Details:
+  [What is measured](https://casoon.github.io/peakmark/docs/concepts/measurements/#validation-comes-first).
+
+### Fixed
+
+- **Size:** the artifact is validated completely, function bodies included, before anything is
+  measured; an invalid module exits with 2 instead of passing a size-only check.
+
 ## [0.1.1] - 2026-11-12
 
 ### Changed

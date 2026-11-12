@@ -65,6 +65,18 @@ pub enum Error {
         /// The cause.
         source: wasmparser::BinaryReaderError,
     },
+    /// The artifact is valid but uses a WebAssembly feature peakmark does not support.
+    UnsupportedFeature {
+        /// The artifact.
+        path: PathBuf,
+        /// What the validator rejected.
+        source: wasmparser::BinaryReaderError,
+    },
+    /// The artifact is a WebAssembly component; only core modules are measured.
+    UnsupportedComponent {
+        /// The artifact.
+        path: PathBuf,
+    },
     /// Node, which scenarios run in, could not be started.
     NodeStart(std::io::Error),
     /// A scenario exited with an error.
@@ -160,6 +172,16 @@ impl fmt::Display for Error {
                 "{} is not a valid WebAssembly module: {source}",
                 path.display()
             ),
+            Self::UnsupportedFeature { path, source } => write!(
+                f,
+                "{} uses a WebAssembly feature peakmark does not support: {source}",
+                path.display()
+            ),
+            Self::UnsupportedComponent { path } => write!(
+                f,
+                "{} is a WebAssembly component; peakmark measures core modules only",
+                path.display()
+            ),
             Self::NodeStart(source) => {
                 write!(f, "cannot start node, which scenarios run in: {source}")
             }
@@ -204,8 +226,11 @@ impl std::error::Error for Error {
             Self::BaselineSyntax { source, .. } | Self::ScenarioUnreadable { source, .. } => {
                 Some(source)
             }
-            Self::InvalidModule { source, .. } => Some(source),
-            Self::ScenarioFailed { .. }
+            Self::InvalidModule { source, .. } | Self::UnsupportedFeature { source, .. } => {
+                Some(source)
+            }
+            Self::UnsupportedComponent { .. }
+            | Self::ScenarioFailed { .. }
             | Self::ScenarioNoResult { .. }
             | Self::UnknownModule { .. }
             | Self::OverBudget { .. } => None,
