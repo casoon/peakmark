@@ -9,8 +9,8 @@ a budget and with the values you last accepted. Over the budget, the check
 fails. Past the baseline, it warns and names the command that accepts the
 growth on purpose.
 
-> Status: pre-release, not published. Built for modules made with
-> `wasm-bindgen`; the commands are `check` and `accept`.
+> Status: first release. Built for modules made with `wasm-bindgen`; the
+> commands are `check` and `accept`.
 
 ## Why memory
 
@@ -22,7 +22,18 @@ peakmark reads it from the instance itself, not from the process around it.
 ## Install
 
 ```bash
-cargo install --path .
+cargo install peakmark
+```
+
+Or build from a checkout with `cargo install --path .`.
+
+Official binaries come only from the GitHub releases of `casoon/peakmark`,
+built there by the release workflow, never on a developer machine. To verify a
+download by hand, check the hash and the signed build provenance:
+
+```bash
+shasum -a 256 -c peakmark-<version>-<target>.tar.gz.sha256
+gh attestation verify peakmark-<version>-<target>.tar.gz --repo casoon/peakmark
 ```
 
 Scenarios run in Node.js, so `node` has to be on the `PATH`. A configuration

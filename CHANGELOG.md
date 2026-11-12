@@ -6,6 +6,8 @@ change the configuration, the baseline format or the output.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-12
+
 ### Added
 
 - **CLI:** `peakmark check` measures every configured module and compares it with its budget
