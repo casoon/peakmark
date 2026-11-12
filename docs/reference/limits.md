@@ -23,6 +23,10 @@ order: 3
 - Only core modules are measured. A component is refused with exit code 2, as is a module that
   uses a feature outside WebAssembly 3.0.
 - peakmark measures finished artifacts and does not build them.
+- [Explanations](../../concepts/explanations/) are limited to three per module and rest on the
+  stored inventory: against a baseline from before it, a growth is only named as not attributable.
+  They state what the file or the trace contains, not a saving, a cause in the source or a security
+  property.
 
 ## Scenario deadline
 

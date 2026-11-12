@@ -75,6 +75,11 @@ Next steps:
   • Shrink the module, or raise its budget in the configuration on purpose
 ```
 
+When something changed, `check` also lists up to three evidence-backed
+[explanations](https://casoon.github.io/peakmark/docs/concepts/explanations/) under the findings: the
+part that moved with before and after, how sure that is, what it does not cover and what to look at
+next. They never change the verdict, accept a baseline or run anything.
+
 How scenarios are written, what is measured and how budget and baseline work
 together is in the [documentation](https://casoon.github.io/peakmark/docs/).
 

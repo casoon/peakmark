@@ -11,7 +11,9 @@ peakmark accept (<module>... | --all) --reason <text>
 
 ## `check`
 
-Measures every module and compares it with its budget and baseline.
+Measures every module and compares it with its budget and baseline. Under the findings of a
+module it lists up to three [explanations](../../concepts/explanations/) of what changed, with
+before and after, status, coverage and a next step; they never change the verdict.
 
 ```text
 ✔ peakmark check: 1 module within budget and baseline
@@ -61,7 +63,11 @@ the accepted inventory carry `baseline/interface-added`, `baseline/interface-rem
 `baseline/inventory-missing`. A change of size is attributed with the notes
 `baseline/size-sections` and `baseline/size-functions`, and `baseline/sizes-missing` if the baseline
 predates them; see [Attributing a size change](../../concepts/inventory/#attributing-a-size-change).
-A [policy](../../concepts/inventory/#policy) adds
+Explanations carry the rules `explain/composition`, `explain/not-comparable`,
+`explain/insufficient`, `explain/import-added`, `explain/feature-added`,
+`explain/function-growth`, `explain/code-growth`, `explain/data-growth`, `explain/debug-growth`,
+`explain/names-growth`, `explain/custom-growth` and `explain/memory-growth`; see
+[Explanations](../../concepts/explanations/#the-rules). A [policy](../../concepts/inventory/#policy) adds
 `policy/export-missing`, `policy/export-signature`, `policy/import-not-allowed`,
 `policy/import-signature`, `policy/feature-not-allowed` and `policy/feature-unverifiable`. Only a
 metric over its budget or a broken policy exits with `1`. Growth, a missing baseline, changed
@@ -86,3 +92,9 @@ broken policy rules, each with `rule`, `level` (`error`), `message`, the `action
 its `assumptions`, its `coverage` and, per function, the `reachability`, a `path` from an export or
 the start function and the direct `callers`; see
 [Why a function is in the module](../../concepts/inventory/#why-a-function-is-in-the-module).
+
+`explanations` lists the best three explanations of the module, in rank order (`rule`, `status`,
+`subject`, `summary`, `evidence` with `was` and `now`, `reached`, `coverage`, `action`), and
+`explanations_omitted` counts the ones the cap left out; see
+[Explanations](../../concepts/explanations/#what-an-explanation-is-made-of). The findings they
+rest on stay complete in `issues` and `changes`.

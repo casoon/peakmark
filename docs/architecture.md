@@ -23,6 +23,7 @@ src/
 ├── snapshot.rs    the inventory as the baseline keeps it, and the diff of two: Snapshot, Drift, section and function drift
 ├── policy.rs      [module.policy]: required exports, allowed imports and features, Violation
 ├── reach.rs       the conservative reference graph of a module: Reach, Explanation (path from a root, callers)
+├── explain.rs     the ranked, evidence-backed explanations of a module's findings: Explanation, Explained
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
 ├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
@@ -56,7 +57,10 @@ tests/
    `Policy` is evaluated into `Violation`s, which fail the check like a budget. A change of size is
    attributed the same way: `snapshot::section_drift` and `snapshot::function_drift` become
    `Change::Sections` and `Change::Functions`, notes that never decide the verdict.
-5. `report::report` or `report::json` turns the results into the output; `check::verdict` decides
+5. `explain::explain` reads the result of step 4 (issues, changes, measured inventory, reach and
+   trace) and keeps at most three explanations on the `ModuleResult`. It runs after every finding
+   is decided and adds none.
+6. `report::report` or `report::json` turns the results into the output; `check::verdict` decides
    the exit code.
 
 `peakmark accept` runs steps 1 to 3 for the chosen modules, refuses a module that is over its
@@ -90,6 +94,12 @@ module values, per-scenario values, contract, inventory snapshot) and the reason
   function without a path is `no_static_root` (or `unknown`), and nothing in it is a size, a
   saving or a verdict. `report` adds the names from `Inventory::functions`. Nothing of it is
   stored in the baseline.
+- **`explain` assembles, it does not measure or judge.** It reads the typed results that `check`
+  already holds (`Issue`, `Change`, `Measured`) and runs no analysis of its own, so its cost is
+  that of sorting a handful of candidates. Its tiers (input, interface, size and memory), the
+  status of each explanation and the cap of three are its own; a verdict, a budget or a baseline
+  never depends on it, and no finding is dropped because an explanation took its place. An
+  explanation without evidence is not made.
 - **Only `check` decides** what is an error and what is a warning. A policy `Violation` is an error
   and no baseline waives it; an inventory difference is a warning. `report` formats those decisions
   and does not make its own.

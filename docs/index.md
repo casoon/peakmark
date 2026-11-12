@@ -17,6 +17,8 @@ accepts the growth on purpose.
   [what the memory values are](concepts/measurements/#what-the-memory-values-are).
 - An inventory of what each module imports, exports, declares and requires, read from the file
   without running it; see [Inventory](concepts/inventory/).
+- Up to three evidence-backed explanations of what changed, attached to `check` by itself; see
+  [Explanations](concepts/explanations/).
 - A budget per module in `peakmark.toml` and a baseline in the repository, with the reason for
   every change.
 

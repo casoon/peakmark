@@ -272,7 +272,7 @@ size ranking.
 ### Cost and limits
 
 The graph is one pass over the code section plus two breadth-first searches. On a synthetic module
-of 1.7 MB with 20 000 functions it takes about 7 ms in a release build. It runs for every check;
+of 1.7 MB with 20 000 functions it takes about 7 ms in a release build. It runs for every check (about 1 to 2 percent of the measurement, see [Explanations](../explanations/#cost));
 the library API does not need the rest of the check: `peakmark::reach::Reach::from_bytes` and
 `Reach::explain` are documented with `cargo doc`.
 
