@@ -27,3 +27,22 @@ wasmparser = "0.263.0"
 [dev-dependencies]
 serde_json = "1.0.154"
 wat = "1.263.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+# Byte counts are far below 2^52 and the rounding is the point of the
+# conversion, so the casts between u64 and f64 lose nothing that matters.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# The only `expect`s serialise plain data or write to a `Vec`; they state an
+# invariant and cannot fire, so they get no `# Panics` section.
+missing_panics_doc = "allow"

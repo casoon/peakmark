@@ -1,29 +1,46 @@
 //! `peakmark.toml`: the modules to gate, their budgets and their scenarios.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::metric::{Values, parse_bytes, parse_percent};
+use crate::error::Error;
+use crate::metric::Values;
+use crate::units::{ParseError, parse_bytes, parse_percent};
 
+/// A parsed `peakmark.toml`.
+#[derive(Debug)]
 pub struct Config {
     /// The directory of the configuration file; every path is relative to it.
     pub dir: PathBuf,
     /// Growth over the baseline below this fraction is not reported.
     pub tolerance: f64,
+    /// The modules to gate, in file order.
     pub modules: Vec<Module>,
 }
 
+/// One `[[module]]`.
+#[derive(Debug)]
 pub struct Module {
+    /// The name baselines and reports use.
     pub name: String,
+    /// The `.wasm` file.
     pub artifact: PathBuf,
+    /// The JavaScript glue that instantiates the module, if it needs one.
     pub glue: Option<PathBuf>,
+    /// What the module may reach; a missing value is not gated.
     pub budget: Values,
+    /// The scenarios that measure memory.
     pub scenarios: Vec<Scenario>,
 }
 
+/// One `[[scenario]]` of a module.
+#[derive(Debug)]
 pub struct Scenario {
+    /// The script, relative to the configuration file.
     pub file: PathBuf,
+    /// How often the script runs on one instance.
     pub repeat: u32,
 }
 
@@ -70,21 +87,97 @@ fn one() -> u32 {
     1
 }
 
-pub fn load(path: &Path) -> Result<Config, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let raw: RawConfig =
-        toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
+/// A configuration that parses but cannot be used.
+#[derive(Debug, PartialEq)]
+pub enum ConfigError {
+    /// There is no `[[module]]`.
+    NoModules,
+    /// Two modules share a name.
+    DuplicateModule(String),
+    /// A size or the tolerance does not parse.
+    Value(ParseError),
+    /// A scenario runs zero times.
+    ZeroRepeat(PathBuf),
+    /// A scenario names a module that is not configured.
+    UnknownScenarioModule {
+        /// The scenario script.
+        file: PathBuf,
+        /// The module name it gives.
+        module: String,
+    },
+    /// A `peak_memory` budget with nothing to measure it.
+    PeakMemoryWithoutScenario(String),
+    /// A `growth_per_run` budget without a scenario that repeats.
+    GrowthWithoutRepeat(String),
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoModules => write!(f, "no [[module]] is configured"),
+            Self::DuplicateModule(name) => write!(f, "module `{name}` is configured twice"),
+            Self::Value(error) => error.fmt(f),
+            Self::ZeroRepeat(file) => write!(f, "scenario {} has repeat = 0", file.display()),
+            Self::UnknownScenarioModule { file, module } => write!(
+                f,
+                "scenario {} names the unknown module `{module}`",
+                file.display()
+            ),
+            Self::PeakMemoryWithoutScenario(name) => write!(
+                f,
+                "module `{name}` has a peak_memory budget but no [[scenario]] to measure it"
+            ),
+            Self::GrowthWithoutRepeat(name) => write!(
+                f,
+                "module `{name}` has a growth_per_run budget but no [[scenario]] with repeat >= 2"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Value(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<ParseError> for ConfigError {
+    fn from(error: ParseError) -> Self {
+        Self::Value(error)
+    }
+}
+
+/// Reads and checks the configuration at `path`.
+///
+/// # Errors
+///
+/// Fails if the file cannot be read, is not valid TOML, has unknown keys or
+/// contradicts itself.
+pub fn load(path: &Path) -> Result<Config, Error> {
+    let text = std::fs::read_to_string(path).map_err(|source| Error::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let raw: RawConfig = toml::from_str(&text).map_err(|source| Error::ConfigSyntax {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let dir = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    resolve(raw, dir).map_err(|error| format!("{}: {error}", path.display()))
+    resolve(raw, dir).map_err(|source| Error::Config {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
-fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, String> {
+fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, ConfigError> {
     if raw.modules.is_empty() {
-        return Err("no [[module]] is configured".to_string());
+        return Err(ConfigError::NoModules);
     }
     let tolerance = match &raw.tolerance {
         Some(text) => parse_percent(text)?,
@@ -94,7 +187,7 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, String> {
     let mut modules: Vec<Module> = Vec::new();
     for module in raw.modules {
         if modules.iter().any(|known| known.name == module.name) {
-            return Err(format!("module `{}` is configured twice", module.name));
+            return Err(ConfigError::DuplicateModule(module.name));
         }
         let size = |text: &Option<String>| text.as_deref().map(parse_bytes).transpose();
         let budget = Values {
@@ -115,21 +208,17 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, String> {
 
     for scenario in raw.scenarios {
         if scenario.repeat == 0 {
-            return Err(format!(
-                "scenario {} has repeat = 0",
-                scenario.file.display()
-            ));
+            return Err(ConfigError::ZeroRepeat(scenario.file));
         }
-        let module = modules
+        let Some(module) = modules
             .iter_mut()
             .find(|module| module.name == scenario.module)
-            .ok_or_else(|| {
-                format!(
-                    "scenario {} names the unknown module `{}`",
-                    scenario.file.display(),
-                    scenario.module
-                )
-            })?;
+        else {
+            return Err(ConfigError::UnknownScenarioModule {
+                file: scenario.file,
+                module: scenario.module,
+            });
+        };
         module.scenarios.push(Scenario {
             file: scenario.file,
             repeat: scenario.repeat,
@@ -138,18 +227,12 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, String> {
 
     for module in &modules {
         if module.budget.peak_memory.is_some() && module.scenarios.is_empty() {
-            return Err(format!(
-                "module `{}` has a peak_memory budget but no [[scenario]] to measure it",
-                module.name
-            ));
+            return Err(ConfigError::PeakMemoryWithoutScenario(module.name.clone()));
         }
         if module.budget.growth_per_run.is_some()
             && !module.scenarios.iter().any(|scenario| scenario.repeat >= 2)
         {
-            return Err(format!(
-                "module `{}` has a growth_per_run budget but no [[scenario]] with repeat >= 2",
-                module.name
-            ));
+            return Err(ConfigError::GrowthWithoutRepeat(module.name.clone()));
         }
     }
 
@@ -164,8 +247,8 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, String> {
 mod tests {
     use super::*;
 
-    fn parse(text: &str) -> Result<Config, String> {
-        let raw: RawConfig = toml::from_str(text).map_err(|error| error.to_string())?;
+    fn parse(text: &str) -> Result<Config, ConfigError> {
+        let raw: RawConfig = toml::from_str(text).expect("the fixture is valid TOML");
         resolve(raw, PathBuf::from("."))
     }
 
@@ -191,7 +274,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.tolerance, 0.02);
+        assert!((config.tolerance - 0.02).abs() < f64::EPSILON);
         let engine = &config.modules[0];
         assert_eq!(engine.budget.brotli, Some(258_000));
         assert_eq!(engine.budget.peak_memory, Some(24 * 1024 * 1024));
@@ -208,19 +291,67 @@ mod tests {
             budget = { peak_memory = "1 MiB" }
             "#,
         )
-        .err()
-        .unwrap();
-        assert!(error.contains("no [[scenario]]"), "{error}");
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::PeakMemoryWithoutScenario("engine".to_string())
+        );
+        assert!(error.to_string().contains("no [[scenario]]"), "{error}");
+    }
+
+    #[test]
+    fn refuses_a_growth_budget_without_a_repeating_scenario() {
+        let error = parse(
+            r#"
+            [[module]]
+            name = "engine"
+            artifact = "engine.wasm"
+            budget = { growth_per_run = "0" }
+
+            [[scenario]]
+            module = "engine"
+            file = "once.mjs"
+            "#,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::GrowthWithoutRepeat("engine".to_string())
+        );
+    }
+
+    #[test]
+    fn refuses_a_module_configured_twice_and_a_scenario_that_never_runs() {
+        let twice = parse(
+            "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n[[module]]\nname = 'a'\nartifact = 'b.wasm'",
+        )
+        .unwrap_err();
+        assert_eq!(twice, ConfigError::DuplicateModule("a".to_string()));
+
+        let never = parse(
+            "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n[[scenario]]\nmodule = 'a'\nfile = 's.mjs'\nrepeat = 0",
+        )
+        .unwrap_err();
+        assert_eq!(never, ConfigError::ZeroRepeat(PathBuf::from("s.mjs")));
+    }
+
+    #[test]
+    fn refuses_a_configuration_without_modules() {
+        assert_eq!(
+            parse("tolerance = '1%'").unwrap_err(),
+            ConfigError::NoModules
+        );
     }
 
     #[test]
     fn refuses_unknown_keys_and_unknown_modules() {
-        assert!(parse("[[module]]\nname = 'a'\nartifact = 'a.wasm'\nbudgett = {}").is_err());
+        let unknown_key = "[[module]]\nname = 'a'\nartifact = 'a.wasm'\nbudgett = {}";
+        assert!(toml::from_str::<RawConfig>(unknown_key).is_err());
+
         let error = parse(
             "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n[[scenario]]\nmodule = 'b'\nfile = 's.mjs'",
         )
-        .err()
-        .unwrap();
-        assert!(error.contains("unknown module `b`"), "{error}");
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown module `b`"), "{error}");
     }
 }

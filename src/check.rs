@@ -1,18 +1,15 @@
-//! Comparing what was measured with the budget and the baseline, and turning
-//! the outcome into a report or JSON.
+//! Comparing what was measured with the budget and the baseline.
 
 use std::path::PathBuf;
 
-use runemark::{
-    Finding, FindingGroup, Location, Metric as ReportMetric, NextStep, Report, Tone, Verdict,
-};
-use serde_json::json;
+use runemark::Verdict;
 
 use crate::baseline::Entry;
 use crate::config::Module;
 use crate::measure::Measured;
-use crate::metric::{Metric, Values};
+use crate::metric::Metric;
 
+/// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     /// Over the budget: the gate fails.
@@ -21,35 +18,51 @@ pub enum Level {
     Warning,
 }
 
+/// One metric that is over its budget or past its baseline.
 #[derive(Debug)]
 pub struct Issue {
+    /// The metric.
     pub metric: Metric,
+    /// Whether it fails the gate.
     pub level: Level,
+    /// The measured value.
     pub value: u64,
     /// The budget for an error, the baseline value for a warning.
     pub limit: u64,
+    /// The scenario a memory value comes from.
     pub scenario: Option<PathBuf>,
 }
 
+/// The outcome of measuring and judging one module.
 pub struct ModuleResult<'a> {
+    /// The configured module.
     pub module: &'a Module,
+    /// What was measured.
     pub measured: Measured,
+    /// The accepted values, if any were accepted.
     pub baseline: Option<&'a Entry>,
+    /// Every metric that is over budget or past the baseline.
     pub issues: Vec<Issue>,
 }
 
 impl ModuleResult<'_> {
+    /// Whether any metric is over its budget.
+    #[must_use]
     pub fn over_budget(&self) -> bool {
         self.issues.iter().any(|issue| issue.level == Level::Error)
     }
 
-    fn grown(&self) -> bool {
+    /// Whether any metric is past its baseline by more than the tolerance.
+    #[must_use]
+    pub fn grown(&self) -> bool {
         self.issues
             .iter()
             .any(|issue| issue.level == Level::Warning)
     }
 }
 
+/// Judges every measured metric of `module` against its budget and baseline.
+#[must_use]
 pub fn evaluate<'a>(
     module: &'a Module,
     measured: Measured,
@@ -96,6 +109,9 @@ fn judge(
     ((value - baseline) as f64 > baseline as f64 * tolerance).then_some((Level::Warning, baseline))
 }
 
+/// The verdict over all modules: failed if any is over budget, a warning if
+/// any grew or has no baseline yet.
+#[must_use]
 pub fn verdict(results: &[ModuleResult]) -> Verdict {
     if results.iter().any(ModuleResult::over_budget) {
         Verdict::Failed
@@ -107,168 +123,6 @@ pub fn verdict(results: &[ModuleResult]) -> Verdict {
     } else {
         Verdict::Passed
     }
-}
-
-pub fn report(results: &[ModuleResult], details: bool) -> Report {
-    let names = |pick: fn(&ModuleResult) -> bool| -> Vec<&str> {
-        results
-            .iter()
-            .filter(|result| pick(result))
-            .map(|result| result.module.name.as_str())
-            .collect()
-    };
-    let over = names(|result| result.over_budget());
-    let grown = names(|result| !result.over_budget() && result.grown());
-    let unset = names(|result| result.baseline.is_none());
-
-    let title = if !over.is_empty() {
-        format!("over budget: {}", over.join(", "))
-    } else if !grown.is_empty() {
-        format!("grown past the baseline: {}", grown.join(", "))
-    } else if !unset.is_empty() {
-        format!("no baseline for {}", unset.join(", "))
-    } else if results.len() == 1 {
-        "1 module within budget and baseline".to_string()
-    } else {
-        format!("{} modules within budget and baseline", results.len())
-    };
-
-    let count = |key: &str, value: usize, tone: Tone| {
-        let metric = ReportMetric::new(key, value.to_string());
-        if value > 0 {
-            metric.with_tone(tone)
-        } else {
-            metric
-        }
-    };
-    let mut report = Report::new(format!("peakmark check: {title}"), verdict(results))
-        .add_metric(ReportMetric::new("Modules", results.len().to_string()))
-        .add_metric(count("Over budget", over.len(), Tone::Error))
-        .add_metric(count("Grown", grown.len(), Tone::Warning));
-
-    if details {
-        let mut measured = FindingGroup::new("Measured");
-        for result in results {
-            measured = measured.add_finding(Finding::new(
-                Tone::Info,
-                format!(
-                    "{}: {}",
-                    result.module.name,
-                    result.measured.values.summary()
-                ),
-            ));
-        }
-        report = report.add_group(measured);
-    }
-
-    for result in results {
-        let mut group = FindingGroup::new(&result.module.name);
-        for issue in &result.issues {
-            group = group.add_finding(finding(issue));
-        }
-        if result.baseline.is_none() {
-            group = group.add_finding(
-                Finding::new(Tone::Warning, "No baseline accepted yet")
-                    .with_rule_id("baseline/missing"),
-            );
-        }
-        if !result.issues.is_empty() || result.baseline.is_none() {
-            report = report.add_group(group);
-        }
-    }
-
-    if !over.is_empty() {
-        report = report.add_next_step(NextStep::new(
-            "Shrink the module, or raise its budget in the configuration on purpose",
-        ));
-    }
-    let to_accept: Vec<&str> = results
-        .iter()
-        .filter(|result| !result.over_budget() && (result.grown() || result.baseline.is_none()))
-        .map(|result| result.module.name.as_str())
-        .collect();
-    if !to_accept.is_empty() {
-        report = report.add_next_step(
-            NextStep::new("Accept the measured values as the new baseline").with_command(format!(
-                "peakmark accept {} --reason \"...\"",
-                to_accept.join(" ")
-            )),
-        );
-    }
-    report
-}
-
-fn finding(issue: &Issue) -> Finding {
-    let metric = issue.metric;
-    let label = capitalize(metric.label());
-    let value = metric.format(issue.value);
-    let (tone, message) = match issue.level {
-        Level::Error => (
-            Tone::Error,
-            format!("{label} {value}, budget {}", metric.format(issue.limit)),
-        ),
-        Level::Warning => (
-            Tone::Warning,
-            format!(
-                "{label} {value}, +{} over the baseline",
-                metric.format(issue.value - issue.limit)
-            ),
-        ),
-    };
-    let finding = Finding::new(tone, message).with_rule_id(metric.rule());
-    match &issue.scenario {
-        Some(scenario) => finding.with_location(Location::file(scenario)),
-        None => finding,
-    }
-}
-
-fn capitalize(text: &str) -> String {
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
-    }
-}
-
-pub fn json(results: &[ModuleResult]) -> serde_json::Value {
-    let verdict = match verdict(results) {
-        Verdict::Failed => "failed",
-        Verdict::Warning => "warning",
-        _ => "passed",
-    };
-    let values = |values: &Values| serde_json::to_value(values).expect("plain data");
-    let modules: Vec<_> = results
-        .iter()
-        .map(|result| {
-            let issues: Vec<_> = result
-                .issues
-                .iter()
-                .map(|issue| {
-                    json!({
-                        "rule": issue.metric.rule(),
-                        "level": match issue.level {
-                            Level::Error => "error",
-                            Level::Warning => "warning",
-                        },
-                        "value": issue.value,
-                        "limit": issue.limit,
-                        "scenario": issue.scenario,
-                    })
-                })
-                .collect();
-            json!({
-                "name": result.module.name,
-                "values": values(&result.measured.values),
-                "budget": values(&result.module.budget),
-                "baseline": result.baseline.map(|entry| values(&entry.values)),
-                "initial_memory": result.measured.initial_memory,
-                "sections": result.measured.sections,
-                "scenarios": result.measured.scenarios,
-                "issues": issues,
-            })
-        })
-        .collect();
-    json!({ "verdict": verdict, "modules": modules })
 }
 
 #[cfg(test)]
@@ -296,5 +150,15 @@ mod tests {
     #[test]
     fn any_growth_from_a_baseline_of_zero_warns() {
         assert_eq!(judge(1, None, Some(0), 0.01), Some((Level::Warning, 0)));
+    }
+
+    #[test]
+    fn a_value_at_its_budget_is_within_it() {
+        assert_eq!(judge(100, Some(100), None, 0.01), None);
+    }
+
+    #[test]
+    fn without_budget_or_baseline_nothing_is_judged() {
+        assert_eq!(judge(100, None, None, 0.01), None);
     }
 }
