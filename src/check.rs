@@ -7,11 +7,15 @@ use runemark::Verdict;
 use crate::baseline::Entry;
 use crate::compress::SETTINGS;
 use crate::config::Module;
+use crate::inventory::Inventory;
 use crate::measure::Measured;
 use crate::metric::Metric;
 use crate::policy::{Violation, evaluate as evaluate_policy};
 use crate::runner::{RUNNER_SCHEMA, Unobserved, WARMUP_RUNS};
-use crate::snapshot::{Drift, Snapshot, diff};
+use crate::snapshot::{
+    Drift, FunctionChangeKind, FunctionDrift, Region, SectionDrift, Snapshot, diff, function_drift,
+    section_drift,
+};
 
 /// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +111,19 @@ pub enum Change {
     Interface(Drift),
     /// The baseline entry predates the stored inventory, so nothing of it is compared.
     InventoryNotAccepted,
+    /// The accepted inventory has no section sizes or function sizes, so the
+    /// change of the size cannot be attributed.
+    SizesNotAccepted,
+    /// The file changed size or shifted between its parts. A statement about
+    /// the bytes, not a gate.
+    Sections {
+        /// Which parts of the file changed, and by how much.
+        drift: SectionDrift,
+        /// What to look at first, grounded in the largest change.
+        action: Option<String>,
+    },
+    /// The function bodies changed, with the confidence of the match.
+    Functions(FunctionDrift),
 }
 
 impl Change {
@@ -122,6 +139,9 @@ impl Change {
             Change::RuntimeChanged { .. } => "baseline/runtime",
             Change::Interface(drift) => drift.rule(),
             Change::InventoryNotAccepted => "baseline/inventory-missing",
+            Change::SizesNotAccepted => "baseline/sizes-missing",
+            Change::Sections { .. } => "baseline/size-sections",
+            Change::Functions(_) => "baseline/size-functions",
         }
     }
 
@@ -131,7 +151,10 @@ impl Change {
         match self {
             Change::Unobserved { .. }
             | Change::RuntimeChanged { .. }
-            | Change::InventoryNotAccepted => Level::Note,
+            | Change::InventoryNotAccepted
+            | Change::SizesNotAccepted
+            | Change::Sections { .. }
+            | Change::Functions(_) => Level::Note,
             _ => Level::Warning,
         }
     }
@@ -297,13 +320,84 @@ fn compare_module(entry: &Entry, measured: &Measured, changes: &mut Vec<Change>)
         });
     }
     match &entry.inventory {
-        Some(accepted) => changes.extend(
-            diff(accepted, &Snapshot::from_inventory(&measured.inventory))
-                .into_iter()
-                .map(Change::Interface),
-        ),
+        Some(accepted) => {
+            let now = Snapshot::from_inventory(&measured.inventory);
+            changes.extend(diff(accepted, &now).into_iter().map(Change::Interface));
+            compare_sizes(accepted, &now, &measured.inventory, changes);
+        }
         None => changes.push(Change::InventoryNotAccepted),
     }
+}
+
+/// Attributes a change of the file to its parts and, where the match is
+/// trustworthy, to functions. Both are notes: the size itself is judged
+/// against the budget and the baseline elsewhere.
+fn compare_sizes(
+    accepted: &Snapshot,
+    now: &Snapshot,
+    inventory: &Inventory,
+    changes: &mut Vec<Change>,
+) {
+    let (Some(was_sections), Some(was_functions)) = (&accepted.sections, &accepted.functions)
+    else {
+        changes.push(Change::SizesNotAccepted);
+        return;
+    };
+    let (Some(now_sections), Some(now_functions)) = (&now.sections, &now.functions) else {
+        return;
+    };
+    let functions = function_drift(was_functions, now_functions);
+    if let Some(drift) = section_drift(was_sections, now_sections) {
+        let action = next_action(&drift, functions.as_ref(), inventory);
+        changes.push(Change::Sections { drift, action });
+    }
+    changes.extend(functions.map(Change::Functions));
+}
+
+/// What to look at first, from the part that grew most. It names evidence and
+/// never a saving.
+fn next_action(
+    sections: &SectionDrift,
+    functions: Option<&FunctionDrift>,
+    inventory: &Inventory,
+) -> Option<String> {
+    let grown = sections
+        .changed
+        .iter()
+        .filter(|delta| delta.delta() > 0)
+        .max_by_key(|delta| delta.delta())?;
+    Some(match grown.part {
+        Region::Code => {
+            let culprit = functions.and_then(|drift| {
+                drift.changes.iter().find(|change| {
+                    matches!(
+                        change.kind,
+                        FunctionChangeKind::Changed | FunctionChangeKind::Added
+                    ) && change.delta().is_none_or(|delta| delta > 0)
+                })
+            });
+            match culprit {
+                Some(change) => format!("Review the function {}", change.key),
+                None => "Review the code that changed; no function could be matched to the accepted build, see check --details for the largest bodies".to_string(),
+            }
+        }
+        Region::Data => match inventory.data.largest.first() {
+            Some(segment) => format!(
+                "Examine the embedded data: the largest segment is {} bytes at {}; peakmark does not show what it holds",
+                segment.size,
+                match (segment.memory, segment.offset) {
+                    (None, _) => "no fixed place (passive)".to_string(),
+                    (Some(memory), Some(offset)) => format!("memory {memory}, offset {offset:#x}"),
+                    (Some(memory), None) => format!("memory {memory}, a computed offset"),
+                }
+            ),
+            None => "Examine the embedded data".to_string(),
+        },
+        Region::Names | Region::Debug => "Name or debug information grew. If this is the artifact you deploy, build the deployment artifact without it; peakmark does not modify files".to_string(),
+        Region::Custom => "Look at the custom sections check --details lists by name".to_string(),
+        Region::Structure => "Types, imports, exports or tables grew; compare with the interface changes".to_string(),
+        Region::Overhead => return None,
+    })
 }
 
 fn compare_scenarios(

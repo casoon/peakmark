@@ -6,7 +6,11 @@
 //! and the features the binary needs. It is compact (one short entry per
 //! declaration) and deterministic (every list is sorted), so reordering a
 //! module changes nothing. Later parts add fields next to these; a field the
-//! file lacks reads as absent, never as a changed value.
+//! file lacks reads as absent, never as a changed value. The size parts are
+//! [`Snapshot::sections`] (the bytes of the file by purpose) and
+//! [`Snapshot::functions`] (the count, the sum and only the largest function
+//! bodies, so the file stays small), compared by [`section_drift`] and
+//! [`function_drift`].
 //!
 //! # Identity
 //!
@@ -30,7 +34,9 @@ use std::fmt::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::inventory::{ExternType, Feature, Inventory, MemoryType, TableType};
+use crate::inventory::{
+    Composition, ExternType, Feature, FunctionBody, Inventory, MemoryType, TableType,
+};
 
 /// The default size of a memory page; any other size is written out.
 const DEFAULT_PAGE_SIZE: u64 = 65_536;
@@ -121,6 +127,136 @@ pub struct Snapshot {
     /// The features the binary needs, by their snake-case name, in the order of [`Feature`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
+    /// The bytes of the file by purpose. Absent in entries accepted before they were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Composition>,
+    /// The function bodies. Absent in entries accepted before they were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub functions: Option<FunctionList>,
+}
+
+/// One of the largest function bodies as the snapshot keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionEntry {
+    /// The index in the file it was read from. Kept only where the function has
+    /// no identity of its own (no name, no export, or a name that occurs twice):
+    /// it is valid in that one file and never used to match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// Bytes of the body, shallow.
+    pub size: u64,
+    /// The name from the `name` section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The first export name, if exported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<String>,
+}
+
+/// What a name or export makes of a function: the only thing two builds are
+/// matched by.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(tag = "by", content = "value", rename_all = "snake_case")]
+pub enum FunctionKey {
+    /// The name in the `name` section.
+    Name(String),
+    /// An export name, for a function without a name.
+    Export(String),
+}
+
+impl fmt::Display for FunctionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Name(name) => f.write_str(name),
+            Self::Export(name) => write!(f, "export \"{name}\""),
+        }
+    }
+}
+
+impl FunctionEntry {
+    /// The identity of the function across builds, if it has one.
+    #[must_use]
+    pub fn key(&self) -> Option<FunctionKey> {
+        match (&self.name, &self.export) {
+            (Some(name), _) => Some(FunctionKey::Name(name.clone())),
+            (None, Some(export)) => Some(FunctionKey::Export(export.clone())),
+            (None, None) => None,
+        }
+    }
+
+    /// What a sentence calls it: the key, or the local ID.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match (self.key(), self.id) {
+            (Some(key), _) => key.to_string(),
+            (None, Some(id)) => format!("func[{id}]"),
+            (None, None) => "a function".to_string(),
+        }
+    }
+}
+
+/// The function bodies of a module as the baseline keeps them: bounded, with
+/// only the [`crate::inventory::LARGEST_FUNCTIONS`] largest listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionList {
+    /// Number of defined functions.
+    pub count: u32,
+    /// The sum of all body sizes.
+    pub body_bytes: u64,
+    /// The largest bodies, biggest first.
+    #[serde(default)]
+    pub largest: Vec<FunctionEntry>,
+}
+
+impl FunctionList {
+    /// Whether every function is listed, so that one missing from the list is
+    /// not there.
+    #[must_use]
+    pub fn complete(&self) -> bool {
+        self.largest.len() as u64 == u64::from(self.count)
+    }
+
+    fn of(inventory: &Inventory) -> Self {
+        let functions = &inventory.functions;
+        let key_of = |body: &FunctionBody| {
+            body.name.clone().map_or_else(
+                || body.exported_as.first().cloned().map(FunctionKey::Export),
+                |name| Some(FunctionKey::Name(name)),
+            )
+        };
+        let mut occurrences: BTreeMap<FunctionKey, u32> = BTreeMap::new();
+        for body in &functions.bodies {
+            if let Some(key) = key_of(body) {
+                *occurrences.entry(key).or_default() += 1;
+            }
+        }
+        let mut largest: Vec<FunctionEntry> = functions
+            .largest
+            .iter()
+            .map(|body| {
+                let unique = key_of(body).is_some_and(|key| occurrences[&key] == 1);
+                FunctionEntry {
+                    id: (!unique).then_some(body.index),
+                    size: body.size,
+                    name: body.name.clone(),
+                    export: body.exported_as.first().cloned(),
+                }
+            })
+            .collect();
+        largest.sort_by(|a, b| {
+            (std::cmp::Reverse(a.size), &a.name, &a.export, a.id).cmp(&(
+                std::cmp::Reverse(b.size),
+                &b.name,
+                &b.export,
+                b.id,
+            ))
+        });
+        FunctionList {
+            count: functions.count,
+            body_bytes: functions.body_bytes,
+            largest,
+        }
+    }
 }
 
 /// The kind and type text of an extern type, as stored.
@@ -260,6 +396,8 @@ impl Snapshot {
                 .iter()
                 .map(|used| feature_id(used.feature))
                 .collect(),
+            sections: Some(inventory.composition),
+            functions: Some(FunctionList::of(inventory)),
         }
     }
 }
@@ -439,6 +577,403 @@ fn diff_items(part: Part, accepted: &[Item], now: &[Item], drifts: &mut Vec<Drif
     }
 }
 
+/// A part of the file, as the section accounting divides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Region {
+    /// The code section.
+    Code,
+    /// The data section.
+    Data,
+    /// The `name` section.
+    Names,
+    /// Debug custom sections.
+    Debug,
+    /// Other custom sections.
+    Custom,
+    /// Types, imports, exports and the other declaring sections.
+    Structure,
+    /// The preamble and the section headers.
+    Overhead,
+}
+
+impl Region {
+    /// All parts, in the order a report lists them.
+    pub const ALL: [Region; 7] = [
+        Region::Code,
+        Region::Data,
+        Region::Names,
+        Region::Debug,
+        Region::Custom,
+        Region::Structure,
+        Region::Overhead,
+    ];
+
+    /// The word a sentence uses.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Data => "data",
+            Self::Names => "names",
+            Self::Debug => "debug",
+            Self::Custom => "other custom",
+            Self::Structure => "declarations",
+            Self::Overhead => "headers and preamble",
+        }
+    }
+
+    /// The bytes of this part.
+    #[must_use]
+    pub fn bytes(self, composition: &Composition) -> u64 {
+        match self {
+            Self::Code => composition.code,
+            Self::Data => composition.data,
+            Self::Names => composition.names,
+            Self::Debug => composition.debug,
+            Self::Custom => composition.custom,
+            Self::Structure => composition.structure,
+            Self::Overhead => composition.overhead,
+        }
+    }
+}
+
+/// How one part of the file changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PartDelta {
+    /// Which part.
+    pub part: Region,
+    /// Bytes when accepted.
+    pub was: u64,
+    /// Bytes now.
+    pub now: u64,
+}
+
+impl PartDelta {
+    /// Bytes gained (positive) or lost.
+    #[must_use]
+    pub fn delta(&self) -> i64 {
+        self.now as i64 - self.was as i64
+    }
+}
+
+/// How the parts of the file changed between two builds. The parts add up to
+/// the file, so the deltas add up to the change of the file size, exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SectionDrift {
+    /// File bytes when accepted.
+    pub was_total: u64,
+    /// File bytes now.
+    pub now_total: u64,
+    /// The parts that differ, in the order of [`Region::ALL`].
+    pub changed: Vec<PartDelta>,
+}
+
+/// The parts of the file that differ between `accepted` and `now`; `None` if none does.
+#[must_use]
+pub fn section_drift(accepted: &Composition, now: &Composition) -> Option<SectionDrift> {
+    let changed: Vec<_> = Region::ALL
+        .iter()
+        .map(|&part| PartDelta {
+            part,
+            was: part.bytes(accepted),
+            now: part.bytes(now),
+        })
+        .filter(|delta| delta.was != delta.now)
+        .collect();
+    (!changed.is_empty()).then(|| SectionDrift {
+        was_total: accepted.total(),
+        now_total: now.total(),
+        changed,
+    })
+}
+
+/// A function body in one of the two builds, by its local ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct FunctionRef {
+    /// The index in that build. Valid there only.
+    pub id: Option<u32>,
+    /// Bytes of the body.
+    pub size: u64,
+}
+
+/// What happened to a function that is named by a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionChangeKind {
+    /// In both builds, with another size.
+    Changed,
+    /// Not in the accepted build, which lists every function.
+    Added,
+    /// Not in the build now, which lists every function.
+    Removed,
+    /// Among the largest now and not among the accepted largest; it may be new
+    /// or have been smaller. The accepted size is at most the smallest listed.
+    EnteredLargest,
+    /// Among the accepted largest and no longer among the largest now; it may be
+    /// gone or smaller.
+    LeftLargest,
+}
+
+/// One function that changed, found through its key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FunctionChange {
+    /// What happened.
+    pub kind: FunctionChangeKind,
+    /// The name or export it was matched by.
+    pub key: FunctionKey,
+    /// The accepted body; `None` if it was not listed.
+    pub was: Option<u64>,
+    /// The body now; `None` if it is not listed.
+    pub now: Option<u64>,
+}
+
+impl FunctionChange {
+    /// The change in bytes if both sizes are known.
+    #[must_use]
+    pub fn delta(&self) -> Option<i64> {
+        Some(self.now? as i64 - self.was? as i64)
+    }
+
+    fn magnitude(&self) -> u64 {
+        match (self.was, self.now) {
+            (Some(was), Some(now)) => was.abs_diff(now),
+            (Some(size), None) | (None, Some(size)) => size,
+            (None, None) => 0,
+        }
+    }
+}
+
+/// How far two function lists could be matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Confidence {
+    /// Every listed function on both sides has a name or export that occurs once.
+    High,
+    /// Some could be matched by key, some have no usable key.
+    Partial,
+    /// None has a usable key (a stripped module): nothing is matched, and an
+    /// index is never used instead.
+    None,
+}
+
+/// Whether the attribution accounts for the whole change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    /// Matching is high and the listed functions explain the body change to the byte.
+    Exact,
+    /// Part of the change is not attributed: functions are unmatched or not listed.
+    Estimated,
+}
+
+/// How the function bodies changed, as far as the match is trustworthy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FunctionDrift {
+    /// Whether the change is fully attributed.
+    pub status: Status,
+    /// How far the lists could be matched.
+    pub confidence: Confidence,
+    /// Sum of all bodies when accepted.
+    pub was_body_bytes: u64,
+    /// Sum of all bodies now.
+    pub now_body_bytes: u64,
+    /// The change of the sum.
+    pub body_delta: i64,
+    /// The part of the change that changed, added and removed functions explain.
+    pub attributed: i64,
+    /// `body_delta - attributed`: growth or shrinkage no listed function explains.
+    pub unaccounted: i64,
+    /// Functions matched by key, with the same or another size.
+    pub matched: usize,
+    /// The changes, largest first.
+    pub changes: Vec<FunctionChange>,
+    /// Accepted functions without a usable key, by local ID of the accepted build.
+    pub unmatched_accepted: Vec<FunctionRef>,
+    /// Functions now without a usable key, by local ID of this build.
+    pub unmatched_now: Vec<FunctionRef>,
+    /// Whether the accepted list names every function.
+    pub accepted_complete: bool,
+    /// Whether the list now names every function.
+    pub now_complete: bool,
+}
+
+/// The entries of a list that have a key occurring once, and the others.
+fn keyed(list: &FunctionList) -> (BTreeMap<FunctionKey, &FunctionEntry>, Vec<&FunctionEntry>) {
+    let mut occurrences: BTreeMap<FunctionKey, usize> = BTreeMap::new();
+    for key in list.largest.iter().filter_map(FunctionEntry::key) {
+        *occurrences.entry(key).or_default() += 1;
+    }
+    let (mut unique, mut rest) = (BTreeMap::new(), Vec::new());
+    for entry in &list.largest {
+        match entry.key() {
+            Some(key) if occurrences[&key] == 1 => {
+                unique.insert(key, entry);
+            }
+            _ => rest.push(entry),
+        }
+    }
+    (unique, rest)
+}
+
+/// Compares the function lists of two builds. Functions are matched by name
+/// or export only, never by index; those without a usable key are listed as
+/// unmatched. `None` if nothing differs.
+#[must_use]
+pub fn function_drift(accepted: &FunctionList, now: &FunctionList) -> Option<FunctionDrift> {
+    let matching = pair(accepted, now);
+    finish_drift(accepted, now, matching)
+}
+
+/// The result of pairing two lists by key.
+struct Pairing {
+    changes: Vec<FunctionChange>,
+    matched: usize,
+    unmatched_accepted: Vec<FunctionRef>,
+    unmatched_now: Vec<FunctionRef>,
+    keyed_any: bool,
+}
+
+fn pair(accepted: &FunctionList, now: &FunctionList) -> Pairing {
+    let (was_keyed, was_rest) = keyed(accepted);
+    let (now_keyed, now_rest) = keyed(now);
+    let was_all: Vec<_> = accepted
+        .largest
+        .iter()
+        .filter_map(FunctionEntry::key)
+        .collect();
+    let now_all: Vec<_> = now.largest.iter().filter_map(FunctionEntry::key).collect();
+    let (accepted_complete, now_complete) = (accepted.complete(), now.complete());
+    let reference = |entry: &FunctionEntry| FunctionRef {
+        id: entry.id,
+        size: entry.size,
+    };
+
+    let mut changes = Vec::new();
+    let mut matched = 0;
+    let mut unmatched_accepted: Vec<_> = was_rest.iter().map(|entry| reference(entry)).collect();
+    let mut unmatched_now: Vec<_> = now_rest.iter().map(|entry| reference(entry)).collect();
+    for (key, was) in &was_keyed {
+        if let Some(is) = now_keyed.get(key) {
+            matched += 1;
+            if was.size != is.size {
+                changes.push(FunctionChange {
+                    kind: FunctionChangeKind::Changed,
+                    key: key.clone(),
+                    was: Some(was.size),
+                    now: Some(is.size),
+                });
+            }
+        } else if now_all.contains(key) {
+            // The name occurs several times now: no single function to compare with.
+            unmatched_accepted.push(reference(was));
+        } else {
+            changes.push(FunctionChange {
+                kind: if now_complete {
+                    FunctionChangeKind::Removed
+                } else {
+                    FunctionChangeKind::LeftLargest
+                },
+                key: key.clone(),
+                was: Some(was.size),
+                now: None,
+            });
+        }
+    }
+    for (key, is) in &now_keyed {
+        if was_keyed.contains_key(key) {
+            continue;
+        }
+        if was_all.contains(key) {
+            unmatched_now.push(reference(is));
+        } else {
+            changes.push(FunctionChange {
+                kind: if accepted_complete {
+                    FunctionChangeKind::Added
+                } else {
+                    FunctionChangeKind::EnteredLargest
+                },
+                key: key.clone(),
+                was: None,
+                now: Some(is.size),
+            });
+        }
+    }
+    let keyed_any = !was_keyed.is_empty() || !now_keyed.is_empty();
+    Pairing {
+        changes,
+        matched,
+        unmatched_accepted,
+        unmatched_now,
+        keyed_any,
+    }
+}
+
+fn finish_drift(
+    accepted: &FunctionList,
+    now: &FunctionList,
+    pairing: Pairing,
+) -> Option<FunctionDrift> {
+    let Pairing {
+        mut changes,
+        matched,
+        unmatched_accepted,
+        unmatched_now,
+        keyed_any,
+    } = pairing;
+    let (accepted_complete, now_complete) = (accepted.complete(), now.complete());
+    changes.sort_by(|a, b| {
+        (std::cmp::Reverse(a.magnitude()), &a.key).cmp(&(std::cmp::Reverse(b.magnitude()), &b.key))
+    });
+
+    let body_delta = now.body_bytes as i64 - accepted.body_bytes as i64;
+    if changes.is_empty() && body_delta == 0 && accepted.count == now.count {
+        return None;
+    }
+    let attributed: i64 = changes
+        .iter()
+        .map(|change| match change.kind {
+            FunctionChangeKind::Changed => change.delta().unwrap_or(0),
+            FunctionChangeKind::Added => change.now.unwrap_or(0) as i64,
+            FunctionChangeKind::Removed => -(change.was.unwrap_or(0) as i64),
+            FunctionChangeKind::EnteredLargest | FunctionChangeKind::LeftLargest => 0,
+        })
+        .sum();
+    let unaccounted = body_delta - attributed;
+    let unmatched = !unmatched_accepted.is_empty() || !unmatched_now.is_empty();
+    let confidence = if !unmatched {
+        Confidence::High
+    } else if !keyed_any {
+        Confidence::None
+    } else {
+        Confidence::Partial
+    };
+    let status = if confidence == Confidence::High
+        && unaccounted == 0
+        && accepted_complete
+        && now_complete
+    {
+        Status::Exact
+    } else {
+        Status::Estimated
+    };
+    Some(FunctionDrift {
+        status,
+        confidence,
+        was_body_bytes: accepted.body_bytes,
+        now_body_bytes: now.body_bytes,
+        body_delta,
+        attributed,
+        unaccounted,
+        matched,
+        changes,
+        unmatched_accepted,
+        unmatched_now,
+        accepted_complete,
+        now_complete,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +1123,177 @@ mod tests {
         )));
         assert!(drifts.contains(&Drift::FeatureAdded("shared_memory".to_string())));
         assert!(!drifts.iter().any(|d| matches!(d, Drift::FeatureRemoved(_))));
+    }
+
+    /// A function body of `n` `nop`s, so its size is known and differs per function.
+    fn body(name: &str, n: usize) -> String {
+        format!("(func ${name} {})", "nop ".repeat(n))
+    }
+
+    fn sized(parts: &[&str]) -> Snapshot {
+        snapshot(&format!("(module {})", parts.join(" ")))
+    }
+
+    fn functions(accepted: &Snapshot, now: &Snapshot) -> Option<FunctionDrift> {
+        function_drift(
+            accepted.functions.as_ref().unwrap(),
+            now.functions.as_ref().unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_larger_function_body_is_matched_by_name_and_explains_the_change_exactly() {
+        let was = sized(&[&body("parse", 10), &body("render", 20)]);
+        let now = sized(&[&body("render", 20), &body("parse", 110)]);
+        let drift = functions(&was, &now).unwrap();
+        assert_eq!(drift.confidence, Confidence::High);
+        assert_eq!(drift.status, Status::Exact);
+        assert_eq!(drift.body_delta, 100);
+        assert_eq!(drift.unaccounted, 0);
+        assert_eq!(drift.matched, 2);
+        match drift.changes.as_slice() {
+            [change] => {
+                assert_eq!(change.kind, FunctionChangeKind::Changed);
+                assert_eq!(change.key, FunctionKey::Name("parse".to_string()));
+                assert_eq!(change.delta(), Some(100));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_added_and_a_removed_function_are_told_apart_when_the_lists_are_complete() {
+        let was = sized(&[&body("old", 5), &body("same", 5)]);
+        let now = sized(&[&body("new", 8), &body("same", 5)]);
+        let drift = functions(&was, &now).unwrap();
+        let kinds: Vec<_> = drift.changes.iter().map(|c| c.kind).collect();
+        assert!(kinds.contains(&FunctionChangeKind::Added));
+        assert!(kinds.contains(&FunctionChangeKind::Removed));
+        assert_eq!(drift.status, Status::Exact);
+        assert_eq!(drift.unaccounted, 0);
+    }
+
+    #[test]
+    fn stripped_modules_never_match_functions_by_index() {
+        let anon = |n: usize| format!("(func {})", "nop ".repeat(n));
+        // The same two bodies, swapped: by index the sizes would look exchanged.
+        let was = sized(&[&anon(10), &anon(50)]);
+        let swapped = sized(&[&anon(50), &anon(10)]);
+        assert!(functions(&was, &swapped).is_none());
+
+        let grown = sized(&[&anon(50), &anon(90)]);
+        let drift = functions(&was, &grown).unwrap();
+        assert_eq!(drift.confidence, Confidence::None);
+        assert_eq!(drift.status, Status::Estimated);
+        assert_eq!(drift.changes.len(), 0);
+        assert_eq!(drift.matched, 0);
+        assert_eq!(drift.unmatched_accepted.len(), 2);
+        assert_eq!(drift.unmatched_now.len(), 2);
+        assert_eq!(drift.unaccounted, drift.body_delta);
+        assert!(drift.unmatched_now.iter().all(|f| f.id.is_some()));
+    }
+
+    #[test]
+    fn exports_identify_functions_of_a_stripped_module() {
+        let was = sized(&[r#"(func (export "run") nop)"#, "(func nop nop)"]);
+        let now = sized(&[
+            "(func nop nop nop)",
+            r#"(func (export "run") nop nop nop nop)"#,
+        ]);
+        let drift = functions(&was, &now).unwrap();
+        assert_eq!(drift.confidence, Confidence::Partial);
+        assert_eq!(drift.status, Status::Estimated);
+        assert_eq!(drift.changes[0].key, FunctionKey::Export("run".to_string()));
+        assert_eq!(drift.changes[0].delta(), Some(3));
+        assert_eq!(drift.unmatched_accepted.len(), 1);
+        assert_eq!(drift.unmatched_now.len(), 1);
+        // The unexplained part is the unmatched function that grew by one byte.
+        assert_eq!(drift.unaccounted, 1);
+    }
+
+    #[test]
+    fn a_name_that_occurs_twice_is_not_a_key() {
+        let list = |sizes: [u64; 2]| FunctionList {
+            count: 2,
+            body_bytes: sizes.iter().sum(),
+            largest: (0..2)
+                .map(|i| FunctionEntry {
+                    id: Some(i),
+                    size: sizes[i as usize],
+                    name: Some("dup".to_string()),
+                    export: None,
+                })
+                .collect(),
+        };
+        let drift = function_drift(&list([5, 7]), &list([5, 9])).unwrap();
+        assert_eq!(drift.changes.len(), 0);
+        assert_eq!(drift.confidence, Confidence::None);
+        assert_eq!(drift.unmatched_now.len(), 2);
+    }
+
+    #[test]
+    fn a_truncated_list_does_not_call_a_function_added() {
+        let list = |entries: &[(&str, u64)], count| FunctionList {
+            count,
+            body_bytes: entries.iter().map(|e| e.1).sum::<u64>() + 1_000,
+            largest: entries
+                .iter()
+                .map(|(name, size)| FunctionEntry {
+                    id: None,
+                    size: *size,
+                    name: Some((*name).to_string()),
+                    export: None,
+                })
+                .collect(),
+        };
+        let was = list(&[("big", 500), ("mid", 400)], 50);
+        let now = list(&[("big", 500), ("risen", 450)], 50);
+        let drift = function_drift(&was, &now).unwrap();
+        let kinds: Vec<_> = drift.changes.iter().map(|c| c.kind).collect();
+        assert!(kinds.contains(&FunctionChangeKind::EnteredLargest));
+        assert!(kinds.contains(&FunctionChangeKind::LeftLargest));
+        assert!(!kinds.contains(&FunctionChangeKind::Added));
+        assert_eq!(drift.status, Status::Estimated);
+        assert!(!drift.accepted_complete);
+    }
+
+    #[test]
+    fn sections_reconcile_and_name_the_part_that_changed() {
+        let was = sized(&["(memory 1)", &body("f", 3), r#"(data (i32.const 0) "ab")"#]);
+        let now = sized(&[
+            "(memory 1)",
+            &body("f", 3),
+            &format!(r#"(data (i32.const 0) "{}")"#, "x".repeat(300)),
+            r#"(@custom ".debug_info" "0123456789")"#,
+        ]);
+        let drift = section_drift(&was.sections.unwrap(), &now.sections.unwrap()).unwrap();
+        let parts: Vec<_> = drift.changed.iter().map(|d| d.part).collect();
+        assert_eq!(parts, [Region::Data, Region::Debug, Region::Overhead]);
+        let total: i64 = drift.changed.iter().map(PartDelta::delta).sum();
+        assert_eq!(total, drift.now_total as i64 - drift.was_total as i64);
+        assert!(section_drift(&was.sections.unwrap(), &was.sections.unwrap()).is_none());
+    }
+
+    #[test]
+    fn composition_adds_up_to_the_file_and_the_snapshot_stays_bounded() {
+        let many: Vec<_> = (0..60).map(|i| body(&format!("f{i}"), i)).collect();
+        let text = format!("(module {})", many.join(" "));
+        let bytes = wat::parse_str(&text).unwrap();
+        let inventory = Inventory::from_bytes(&bytes).unwrap();
+        assert_eq!(inventory.composition.total(), bytes.len() as u64);
+        assert_eq!(inventory.functions.bodies.len(), 60);
+        let snapshot = Snapshot::from_inventory(&inventory);
+        let functions = snapshot.functions.unwrap();
+        assert_eq!(functions.count, 60);
+        assert_eq!(functions.largest.len(), crate::inventory::LARGEST_FUNCTIONS);
+        assert!(!functions.complete());
+        assert_eq!(functions.largest[0].name.as_deref(), Some("f59"));
+    }
+
+    #[test]
+    fn a_snapshot_without_sizes_reads_them_as_absent() {
+        let s: Snapshot = serde_json::from_str(r#"{"exports":[]}"#).unwrap();
+        assert!(s.sections.is_none() && s.functions.is_none());
     }
 
     #[test]

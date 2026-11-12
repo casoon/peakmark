@@ -1262,3 +1262,189 @@ fn a_missing_required_export_fails() {
     );
     assert_contains(&run.stdout, "[policy/export-missing]");
 }
+
+// Attribution of a size change to sections and functions.
+
+fn sized_module(parse: usize, data: &str, extra: &str) -> String {
+    format!(
+        r#"(module
+    (memory (export "memory") 1)
+    (func $parse (export "parse") {})
+    (func $render (export "render") {})
+    (data (i32.const 0) "{data}")
+    {extra})"#,
+        "nop ".repeat(parse),
+        "nop ".repeat(20),
+    )
+}
+
+fn accepted_sizes(name: &str, wat: &str) -> Project {
+    let project = Project::new(name, &format!("tolerance = \"1000%\"\n{SIZE_ONLY}"));
+    project.write("fixture.wasm", wat::parse_str(wat).unwrap());
+    let accept = project.run(&["accept", "--all", "--reason", "first"]);
+    assert_eq!(accept.code, 0, "{}", accept.stderr);
+    project
+}
+
+fn with_rule<'a>(changes: &'a [serde_json::Value], rule: &str) -> Option<&'a serde_json::Value> {
+    changes.iter().find(|change| change["rule"] == rule)
+}
+
+#[test]
+fn the_first_run_explains_the_composition_without_a_delta() {
+    let project = Project::new("size-first", SIZE_ONLY);
+    project.write(
+        "fixture.wasm",
+        wat::parse_str(sized_module(10, "ab", "")).unwrap(),
+    );
+
+    let json = project.run(&["check", "--json"]);
+    let document: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    let inventory = &document["modules"][0]["inventory"];
+    let file = std::fs::metadata(project.dir.join("fixture.wasm"))
+        .unwrap()
+        .len();
+    let composition = inventory["composition"].as_object().unwrap();
+    let total: u64 = composition.values().map(|v| v.as_u64().unwrap()).sum();
+    assert_eq!(total, file);
+    let largest = inventory["functions"]["largest"].as_array().unwrap();
+    assert_eq!(largest[0]["name"], "render");
+    assert_eq!(inventory["data"]["largest"][0]["size"], 2);
+    assert!(
+        changes(&json)
+            .iter()
+            .all(|c| !c["rule"].as_str().unwrap().starts_with("baseline/size"))
+    );
+
+    let text = project.run(&["check", "--details"]);
+    assert_contains(&text.stdout, "composition: code");
+    assert_contains(&text.stdout, "largest function bodies (raw bytes");
+    assert_contains(&text.stdout, "largest data segments (contents not shown)");
+}
+
+#[test]
+fn a_larger_function_body_is_found_by_name_and_accounted_exactly() {
+    let project = accepted_sizes("size-function", &sized_module(10, "ab", ""));
+    change_to(&project, &sized_module(110, "ab", ""));
+
+    let run = project.run(&["check", "--json"]);
+    let all = changes(&run);
+    let functions = with_rule(&all, "baseline/size-functions").unwrap();
+    assert_eq!(functions["level"], "note");
+    let detail = &functions["detail"];
+    assert_eq!(detail["confidence"], "high");
+    assert_eq!(detail["status"], "exact");
+    assert_eq!(detail["body_delta"], 100);
+    assert_eq!(detail["unaccounted"], 0);
+    assert_eq!(detail["changes"][0]["key"]["value"], "parse");
+    assert_eq!(detail["changes"][0]["kind"], "changed");
+    let sections = with_rule(&all, "baseline/size-sections").unwrap();
+    assert_eq!(sections["detail"]["changed"][0]["part"], "code");
+    assert!(
+        sections["detail"]["action"]
+            .as_str()
+            .unwrap()
+            .contains("Review the function parse")
+    );
+
+    let text = project.run(&["check"]);
+    assert_eq!(text.code, 0, "{}", text.stderr);
+    assert_contains(&text.stdout, "[baseline/size-functions]");
+    assert_contains(&text.stdout, "Function parse: ");
+    assert_contains(&text.stdout, "raw bytes, not a compressed saving");
+}
+
+#[test]
+fn added_data_is_the_contributor_and_its_contents_are_not_printed() {
+    let project = accepted_sizes("size-data", &sized_module(10, "ab", ""));
+    let secret = "s3cret-token-".repeat(40);
+    change_to(&project, &sized_module(10, &secret, ""));
+
+    let run = project.run(&["check", "--json"]);
+    let all = changes(&run);
+    let sections = with_rule(&all, "baseline/size-sections").unwrap();
+    assert_eq!(sections["detail"]["changed"][0]["part"], "data");
+    assert!(
+        sections["detail"]["action"]
+            .as_str()
+            .unwrap()
+            .contains("Examine the embedded data")
+    );
+    assert!(with_rule(&all, "baseline/size-functions").is_none());
+    assert!(!run.stdout.contains("s3cret"));
+    let text = project.run(&["check", "--details"]);
+    assert!(!text.stdout.contains("s3cret"));
+    assert_contains(&text.stdout, "[baseline/size-sections]");
+}
+
+#[test]
+fn an_added_debug_section_is_named_and_the_module_is_not_modified() {
+    let project = accepted_sizes("size-debug", &sized_module(10, "ab", ""));
+    change_to(
+        &project,
+        &sized_module(
+            10,
+            "ab",
+            &format!(r#"(@custom ".debug_info" "{}")"#, "0".repeat(500)),
+        ),
+    );
+    let before = std::fs::read(project.dir.join("fixture.wasm")).unwrap();
+
+    let run = project.run(&["check", "--json"]);
+    let all = changes(&run);
+    let sections = with_rule(&all, "baseline/size-sections").unwrap();
+    assert_eq!(sections["detail"]["changed"][0]["part"], "debug");
+    assert_contains(
+        sections["detail"]["action"].as_str().unwrap(),
+        "deployment artifact",
+    );
+    assert_eq!(
+        before,
+        std::fs::read(project.dir.join("fixture.wasm")).unwrap()
+    );
+}
+
+#[test]
+fn a_stripped_reordered_module_is_not_matched_by_index() {
+    let stripped = |first: usize, second: usize| {
+        format!(
+            "(module (func {}) (func {}))",
+            "nop ".repeat(first),
+            "nop ".repeat(second)
+        )
+    };
+    let project = accepted_sizes("size-stripped", &stripped(10, 50));
+    change_to(&project, &stripped(50, 90));
+
+    let run = project.run(&["check", "--json"]);
+    let all = changes(&run);
+    let detail = &with_rule(&all, "baseline/size-functions").unwrap()["detail"];
+    assert_eq!(detail["confidence"], "none");
+    assert_eq!(detail["status"], "estimated");
+    assert_eq!(detail["changes"].as_array().unwrap().len(), 0);
+    assert_eq!(detail["unmatched_now"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["unaccounted"], detail["body_delta"]);
+
+    let text = project.run(&["check", "--details"]);
+    assert_contains(&text.stdout, "Unmatched now");
+    assert_contains(&text.stdout, "func[");
+}
+
+#[test]
+fn an_entry_without_sizes_notes_it_and_attributes_nothing() {
+    let project = accepted_sizes("size-old-entry", &sized_module(10, "ab", ""));
+    let mut saved = baseline_json(&project);
+    let inventory = saved["modules"]["fixture"]["inventory"]
+        .as_object_mut()
+        .unwrap();
+    inventory.remove("sections");
+    inventory.remove("functions");
+    project.write("peakmark.baseline.json", saved.to_string());
+    change_to(&project, &sized_module(110, "ab", ""));
+
+    let run = project.run(&["check", "--json"]);
+    let all = changes(&run);
+    assert!(with_rule(&all, "baseline/sizes-missing").is_some());
+    assert!(with_rule(&all, "baseline/size-functions").is_none());
+    assert_eq!(run.code, 0, "{}", run.stderr);
+}

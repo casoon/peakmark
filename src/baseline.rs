@@ -270,7 +270,7 @@ mod tests {
         let text = serde_json::to_string(&Snapshot::from_inventory(&inventory)).unwrap();
         assert_eq!(
             text,
-            r#"{"imports":[{"module":"env","name":"log","kind":"func","type":"(i32) -> ()"}],"exports":[{"name":"a","kind":"func","type":"() -> i32"},{"name":"b","kind":"func","type":"() -> ()"}]}"#
+            r#"{"imports":[{"module":"env","name":"log","kind":"func","type":"(i32) -> ()"}],"exports":[{"name":"a","kind":"func","type":"() -> i32"},{"name":"b","kind":"func","type":"() -> ()"}],"sections":{"code":9,"data":0,"names":0,"debug":0,"custom":0,"structure":35,"overhead":18},"functions":{"count":2,"body_bytes":6,"largest":[{"size":4,"export":"a"},{"size":2,"export":"b"}]}}"#
         );
     }
 

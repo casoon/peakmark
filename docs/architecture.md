@@ -19,8 +19,8 @@ src/
 ├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values and trace, contract, inventory snapshot) and the history log
 ├── measure.rs     one module in, one Measured out
 ├── wasm.rs        validation, sections and declared memory, read with wasmparser
-├── inventory.rs   the static inventory: interface, memories, derived features, sections, metadata
-├── snapshot.rs    the inventory as the baseline keeps it, and the diff of two: Snapshot, Drift
+├── inventory.rs   the static inventory: interface, memories, derived features, sections, composition, function bodies, data segments, metadata
+├── snapshot.rs    the inventory as the baseline keeps it, and the diff of two: Snapshot, Drift, section and function drift
 ├── policy.rs      [module.policy]: required exports, allowed imports and features, Violation
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
@@ -51,7 +51,9 @@ tests/
    (a scenario removed or new, a metric no longer measured, a measurement that cannot be compared)
    it records a `Change` instead of a number. The inventory is compared as well: `snapshot::diff`
    of the accepted `Snapshot` and the measured one becomes `Change::Interface`, and the module's
-   `Policy` is evaluated into `Violation`s, which fail the check like a budget.
+   `Policy` is evaluated into `Violation`s, which fail the check like a budget. A change of size is
+   attributed the same way: `snapshot::section_drift` and `snapshot::function_drift` become
+   `Change::Sections` and `Change::Functions`, notes that never decide the verdict.
 5. `report::report` or `report::json` turns the results into the output; `check::verdict` decides
    the exit code.
 
@@ -74,7 +76,10 @@ module values, per-scenario values, contract, inventory snapshot) and the reason
   attribution, explanations) use the model, not the output. It states what the bytes contain;
   `Coverage` states what it could not decide, and a gap is never "not used". The baseline keeps a
   `snapshot::Snapshot` of it, not the model: compact, sorted, with an identity per declaration
-  (module, name, kind), and extensible by optional fields for later parts such as section sizes.
+  (module, name, kind), and extensible by optional fields; section sizes and the largest function bodies are such fields.
+  `Inventory::functions` holds every body with its raw size, name and exports for later parts
+  (the snapshot keeps only the largest); functions are matched across builds by name or export,
+  never by index.
   Differences are warnings; only a `policy::Policy` that the project configured fails the check, and
   it is strict about what it cannot classify.
 - **Only `check` decides** what is an error and what is a warning. A policy `Violation` is an error

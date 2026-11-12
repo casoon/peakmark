@@ -31,8 +31,10 @@ Per module, the baseline keeps:
 - **`inventory`**: the accepted interface of the module: imports and exports with their types, the
   memories and tables it keeps to itself, and the features it needs. It is compared by identity
   (module, name, kind), not by position; see [Against the baseline](../inventory/#against-the-baseline).
-  Parts that later versions add (sections, function sizes) are stored next to these. An entry
-  without it is valid and never read as an empty inventory.
+  Next to these it keeps `sections` (the bytes of the file by purpose) and `functions` (the count,
+  the sum of all bodies and only the 20 largest, so the entry stays bounded). They are optional
+  fields: an entry without them is valid, `check` notes `baseline/sizes-missing`, and nothing is
+  read as zero. Details: [Attributing a size change](../inventory/#attributing-a-size-change).
 
 A scenario's identity is its `file` as written in `peakmark.toml`, once per module. Renaming the
 file is a removed and a new scenario.

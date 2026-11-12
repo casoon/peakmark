@@ -58,7 +58,10 @@ Findings carry a rule: `size/raw`, `size/gzip`, `size/brotli`, `mem/peak`, `mem/
 see [Budget and baseline](../../concepts/budget-and-baseline/#changed-coverage). Differences from
 the accepted inventory carry `baseline/interface-added`, `baseline/interface-removed`,
 `baseline/interface-changed`, `baseline/feature-added`, `baseline/feature-removed` and the note
-`baseline/inventory-missing`; a [policy](../../concepts/inventory/#policy) adds
+`baseline/inventory-missing`. A change of size is attributed with the notes
+`baseline/size-sections` and `baseline/size-functions`, and `baseline/sizes-missing` if the baseline
+predates them; see [Attributing a size change](../../concepts/inventory/#attributing-a-size-change).
+A [policy](../../concepts/inventory/#policy) adds
 `policy/export-missing`, `policy/export-signature`, `policy/import-not-allowed`,
 `policy/import-signature`, `policy/feature-not-allowed` and `policy/feature-unverifiable`. Only a
 metric over its budget or a broken policy exits with `1`. Growth, a missing baseline, changed
@@ -75,5 +78,8 @@ has its `values`, `budget`, `baseline` (the accepted module values), `baseline_s
 and the `detail` of what changed; for an inventory difference that is the `part`, the declaration
 (`module`, `name`, `kind`) and its accepted (`was`) and current (`now`) type. `violations` lists the
 broken policy rules, each with `rule`, `level` (`error`), `message`, the `action` to take and the
-`detail`; `baseline_inventory` is the accepted snapshot. `inventory` is the static inventory of the artifact, with its own
+`detail`; `baseline_inventory` is the accepted snapshot. For a size change the `detail` of
+`baseline/size-sections` lists the parts that differ and an `action`; the one of
+`baseline/size-functions` carries `confidence`, `status`, `changes`, the unmatched functions and
+`unaccounted`. `inventory` is the static inventory of the artifact, with its own
 `schema_version`; see [Inventory](../../concepts/inventory/).

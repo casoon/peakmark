@@ -41,6 +41,12 @@ change the configuration, the baseline format or the output.
   [Policy](https://casoon.github.io/peakmark/docs/concepts/inventory/#policy).
 - **Library:** `peakmark::snapshot` and `peakmark::policy` hold the stored inventory, its diff and
   the policy evaluation.
+- **Size:** a change of size is attributed to the parts of the file and, where names or exports
+  allow a trustworthy match, to function bodies; `--details` and `--json` show the composition
+  from the first run on. Details:
+  [Attributing a size change](https://casoon.github.io/peakmark/docs/concepts/inventory/#attributing-a-size-change).
+- **Baseline:** the inventory snapshot also keeps the bytes of the file by purpose and the 20
+  largest function bodies; the format stays version 2 and entries without them still read.
 - **Library:** `Inventory::functions` and `Inventory::data` hold every function body and data
   segment with raw sizes for later parts.
 

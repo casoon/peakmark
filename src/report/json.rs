@@ -83,7 +83,20 @@ fn change(change: &Change) -> serde_json::Value {
         }
         Change::RuntimeChanged { was, now } => object!({ "was": was, "now": now }),
         Change::Interface(drift) => drift_detail(drift),
-        Change::InventoryNotAccepted => object!({}),
+        Change::InventoryNotAccepted | Change::SizesNotAccepted => object!({}),
+        Change::Sections { drift, action } => {
+            let mut detail = serde_json::to_value(drift).expect("plain data");
+            detail["basis"] =
+                object!("payload and header bytes of the file; the parts add up to the file size");
+            detail["action"] = object!(action);
+            detail
+        }
+        Change::Functions(drift) => {
+            let mut detail = serde_json::to_value(drift).expect("plain data");
+            detail["basis"] =
+                object!("raw shallow body bytes; not additive to gzip or Brotli sizes");
+            detail
+        }
     };
     object!({ "rule": change.rule(), "level": level, "detail": detail })
 }

@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use runemark::{
     DetailLevel, Finding, FindingGroup, Location, Metric as ReportMetric, NextStep, Report, Tone,
 };
@@ -8,8 +10,11 @@ use crate::inventory::{
     TableType, TargetFeatureMode,
 };
 use crate::runner::{ScenarioResult, Unobserved};
-use crate::snapshot::{Drift, Part};
-use crate::units::format_binary;
+use crate::snapshot::{
+    Confidence, Drift, FunctionChange, FunctionChangeKind, FunctionDrift, Part, SectionDrift,
+    Status,
+};
+use crate::units::{format_binary, format_decimal};
 
 /// The report `check` prints. With `details`, it also lists every measured
 /// value.
@@ -128,6 +133,11 @@ fn module_group(result: &ModuleResult) -> Option<FindingGroup> {
     }
     for change in &result.changes {
         group = group.add_finding(change_finding(change));
+        if let Change::Functions(drift) = change {
+            for finding in function_findings(drift) {
+                group = group.add_finding(finding);
+            }
+        }
     }
     if result.baseline.is_none() {
         group = group.add_finding(
@@ -246,6 +256,7 @@ fn inventory_lines(inventory: &Inventory) -> Vec<String> {
         .collect();
     lines.push(format!("not detectable: {}", limits.join("; ")));
     lines.push(sections_line(inventory));
+    lines.extend(size_lines(inventory));
     lines.extend(metadata_lines(inventory));
     lines
 }
@@ -392,6 +403,73 @@ fn feature_line(features: &[FeatureUse]) -> String {
         "features (derived from declarations and instructions): {}",
         listed.join(", ")
     )
+}
+
+/// How the file divides into parts, and the largest function bodies and data
+/// segments. Function sizes are shallow raw bytes; a function without a name or
+/// export is named by its index in this file, which means nothing in another build.
+fn size_lines(inventory: &Inventory) -> Vec<String> {
+    let composition = &inventory.composition;
+    let functions = &inventory.functions;
+    let mut parts = Vec::new();
+    for region in crate::snapshot::Region::ALL {
+        let bytes = region.bytes(composition);
+        if region == crate::snapshot::Region::Code {
+            parts.push(format!(
+                "code {} ({} in {} bodies, {} for their sizes and count)",
+                format_decimal(bytes),
+                format_decimal(functions.body_bytes),
+                functions.count,
+                format_decimal(bytes - functions.body_bytes)
+            ));
+        } else if bytes > 0 {
+            parts.push(format!("{} {}", region.label(), format_decimal(bytes)));
+        }
+    }
+    let mut lines = vec![format!(
+        "composition: {} = file {}",
+        parts.join(" + "),
+        format_decimal(composition.total())
+    )];
+    if !functions.largest.is_empty() {
+        let listed: Vec<_> = functions
+            .largest
+            .iter()
+            .take(10)
+            .map(|body| {
+                let name = body
+                    .name
+                    .clone()
+                    .or_else(|| body.exported_as.first().map(|e| format!("export \"{e}\"")))
+                    .unwrap_or_else(|| body.local_id());
+                format!("{name} {}", format_decimal(body.size))
+            })
+            .collect();
+        lines.push(format!(
+            "largest function bodies (raw bytes, not compressed savings): {}",
+            listed.join(", ")
+        ));
+    }
+    if !inventory.data.largest.is_empty() {
+        let listed: Vec<_> = inventory
+            .data
+            .largest
+            .iter()
+            .map(|segment| {
+                let place = match (segment.memory, segment.offset) {
+                    (None, _) => "passive".to_string(),
+                    (Some(memory), Some(offset)) => format!("memory {memory} at {offset:#x}"),
+                    (Some(memory), None) => format!("memory {memory} at a computed offset"),
+                };
+                format!("{} ({place})", format_decimal(segment.size))
+            })
+            .collect();
+        lines.push(format!(
+            "largest data segments (contents not shown): {}",
+            listed.join(", ")
+        ));
+    }
+    lines
 }
 
 /// Section bytes by kind, custom sections by name, and the preamble and
@@ -547,12 +625,152 @@ fn change_finding(change: &Change) -> Finding {
             "The baseline has no inventory yet, so imports, exports and features are not compared"
                 .to_string()
         }
+        Change::SizesNotAccepted => {
+            "The baseline has no section or function sizes yet, so a change of size is not attributed"
+                .to_string()
+        }
+        Change::Sections { drift, .. } => sections_message(drift),
+        Change::Functions(drift) => functions_message(drift),
     };
     let tone = match change.level() {
         Level::Note => Tone::Info,
         _ => Tone::Warning,
     };
-    Finding::new(tone, message).with_rule_id(change.rule())
+    let finding = Finding::new(tone, message).with_rule_id(change.rule());
+    match change {
+        Change::Sections {
+            action: Some(action),
+            ..
+        } => finding.with_remedy(action),
+        _ => finding,
+    }
+}
+
+fn signed(delta: i64) -> String {
+    let sign = if delta < 0 { '-' } else { '+' };
+    format!("{sign}{}", format_decimal(delta.unsigned_abs()))
+}
+
+fn sections_message(drift: &SectionDrift) -> String {
+    let parts: Vec<_> = drift
+        .changed
+        .iter()
+        .map(|delta| format!("{} {}", delta.part.label(), signed(delta.delta())))
+        .collect();
+    format!(
+        "File {} ({}, was {}): {}; the parts add up to the file size",
+        signed(drift.now_total as i64 - drift.was_total as i64),
+        format_decimal(drift.now_total),
+        format_decimal(drift.was_total),
+        parts.join(", ")
+    )
+}
+
+fn functions_message(drift: &FunctionDrift) -> String {
+    let count = |kind: FunctionChangeKind| drift.changes.iter().filter(|c| c.kind == kind).count();
+    let confidence = match drift.confidence {
+        Confidence::High => "high",
+        Confidence::Partial => "partial",
+        Confidence::None => "none",
+    };
+    let status = match drift.status {
+        Status::Exact => "exact",
+        Status::Estimated => "estimated",
+    };
+    let mut message = format!(
+        "Function bodies {} (raw bytes, not a compressed saving); matching by name or export: confidence {confidence}, {} matched, {} changed, {} added, {} removed, {} unmatched before, {} unmatched now; not attributed to a listed function {}; {status}",
+        signed(drift.body_delta),
+        drift.matched,
+        count(FunctionChangeKind::Changed),
+        count(FunctionChangeKind::Added),
+        count(FunctionChangeKind::Removed),
+        drift.unmatched_accepted.len(),
+        drift.unmatched_now.len(),
+        signed(drift.unaccounted),
+    );
+    let entered = count(FunctionChangeKind::EnteredLargest);
+    let left = count(FunctionChangeKind::LeftLargest);
+    if entered + left > 0 {
+        let _ = write!(
+            message,
+            "; {entered} entered and {left} left the largest functions, which are the only ones listed"
+        );
+    }
+    message
+}
+
+/// The functions with the largest change, one finding each, and the ones that
+/// could not be matched, named by the local ID of the build they are in.
+fn function_findings(drift: &FunctionDrift) -> Vec<Finding> {
+    const SHOWN: usize = 5;
+    let mut findings: Vec<_> = drift
+        .changes
+        .iter()
+        .take(SHOWN)
+        .map(|change| {
+            Finding::new(Tone::Info, function_change_message(change))
+                .with_rule_id("baseline/size-functions")
+        })
+        .collect();
+    let unmatched = |label: &str, refs: &[crate::snapshot::FunctionRef]| {
+        (!refs.is_empty()).then(|| {
+            let listed: Vec<_> = refs
+                .iter()
+                .take(SHOWN)
+                .map(|r| {
+                    format!(
+                        "{} {}",
+                        r.id.map_or_else(|| "?".to_string(), |id| format!("func[{id}]")),
+                        format_decimal(r.size)
+                    )
+                })
+                .collect();
+            Finding::new(
+                Tone::Info,
+                format!(
+                    "Unmatched {label}, no usable name or export, so not compared (local IDs, valid in that build only): {}",
+                    listed.join(", ")
+                ),
+            )
+            .with_rule_id("baseline/size-functions")
+        })
+    };
+    findings.extend(unmatched("before", &drift.unmatched_accepted));
+    findings.extend(unmatched("now", &drift.unmatched_now));
+    findings
+}
+
+fn function_change_message(change: &FunctionChange) -> String {
+    let size = |bytes: Option<u64>| bytes.map_or_else(String::new, format_decimal);
+    match change.kind {
+        FunctionChangeKind::Changed => format!(
+            "Function {}: {} -> {} ({})",
+            change.key,
+            size(change.was),
+            size(change.now),
+            signed(change.delta().unwrap_or(0))
+        ),
+        FunctionChangeKind::Added => {
+            format!("Function {} was added: {}", change.key, size(change.now))
+        }
+        FunctionChangeKind::Removed => {
+            format!(
+                "Function {} was removed: was {}",
+                change.key,
+                size(change.was)
+            )
+        }
+        FunctionChangeKind::EnteredLargest => format!(
+            "Function {} is among the largest now ({}) and was not among the accepted largest; it may be new or have been smaller",
+            change.key,
+            size(change.now)
+        ),
+        FunctionChangeKind::LeftLargest => format!(
+            "Function {} (was {}) is no longer among the largest; it may be gone or smaller",
+            change.key,
+            size(change.was)
+        ),
+    }
 }
 
 fn drift_message(drift: &Drift) -> String {
