@@ -10,7 +10,8 @@ order: 2
   that accepts the growth on purpose.
 - `peakmark accept <module>... --reason "<text>"` stores the measured values as the new baseline and
   appends the reason to `peakmark.history.jsonl`. It refuses a module that is over its budget:
-  raise the budget first.
+  raise the budget first. A module that breaks its [policy](../inventory/#policy) is refused the
+  same way: neither a budget nor a policy is waived by accepting.
 
 Commit all three files. Growth then shows up in review as a decision with a reason, not as drift.
 
@@ -27,6 +28,11 @@ Per module, the baseline keeps:
   observed; they are for reading and are not compared. An entry without them stays valid and is
   never read as zero.
 - **`contract`**: what the values were measured under (see below).
+- **`inventory`**: the accepted interface of the module: imports and exports with their types, the
+  memories and tables it keeps to itself, and the features it needs. It is compared by identity
+  (module, name, kind), not by position; see [Against the baseline](../inventory/#against-the-baseline).
+  Parts that later versions add (sections, function sizes) are stored next to these. An entry
+  without it is valid and never read as an empty inventory.
 
 A scenario's identity is its `file` as written in `peakmark.toml`, once per module. Renaming the
 file is a removed and a new scenario.
@@ -48,13 +54,21 @@ file is a removed and a new scenario.
       },
       "scenarios": {
         "bench/pivot.mjs": { "sha256": "ba7816bf...", "repeat": 5, "peak_memory": 8388608, "growth_per_run": 0 }
+      },
+      "inventory": {
+        "imports": [{ "module": "env", "name": "log", "kind": "func", "type": "(i32) -> ()" }],
+        "exports": [
+          { "name": "add", "kind": "func", "type": "(i32, i32) -> i32" },
+          { "name": "memory", "kind": "memory", "type": "1..256" }
+        ],
+        "features": ["bulk_memory", "mutable_globals"]
       }
     }
   }
 }
 ```
 
-The file is written deterministically (modules and scenarios sorted) and holds one entry per
+The file is written deterministically (modules and scenarios sorted, every inventory list sorted) and holds one entry per
 module and one record per scenario: it does not grow with every check. `accept` writes it to a
 temporary file and replaces the old one in one step, so a failed write leaves the previous baseline
 in place, and it changes only the modules it accepts. The history log gets one line per accepted
@@ -73,6 +87,9 @@ automatically, and a value that was not measured is never counted as zero.
 | `baseline/metric-missing` | a value was accepted and is not measured now, for example `peak_memory` after the scenarios were removed |
 | `baseline/incomparable` | a measurement exists but cannot be compared, and says why |
 | `baseline/runtime` | a note: the Node version differs from the accepted one |
+| `baseline/interface-added`, `-removed`, `-changed` | an import, export, internal memory or table differs from the accepted inventory, see [Against the baseline](../inventory/#against-the-baseline) |
+| `baseline/feature-added`, `-removed` | the features the binary needs differ from the accepted ones |
+| `baseline/inventory-missing` | a note: the entry was accepted before the inventory was kept, so none of it is compared |
 | `memory/coverage` | a note: part of what the scenario should measure was not observed, see [What is not observed](../measurements/#what-is-not-observed) |
 
 All of these leave the exit code at 0, like growth, and turn the verdict to `warning`. Removing a
@@ -93,6 +110,7 @@ with the baseline is skipped for what cannot be compared, and the rest is still 
 | The scenario's `repeat` | the same: peak memory and growth per run both depend on it |
 | gzip or brotli settings (a peakmark release that changes them) | `gzip` and `brotli` are not compared; `raw` and memory are |
 | The measurement protocol or warm-up (`runner_schema`, `warmup_runs`) | memory is not compared; sizes are |
+| The inventory (imports, exports, limits, features) | a warning per difference; nothing else is skipped, because it is compared by declaration, not by position |
 | The artifact (its SHA-256) | nothing: it changes with every build and only identifies the file |
 | The Node version | nothing; reported as `baseline/runtime`, because memory is read from the instance, not from the process around it |
 
@@ -103,6 +121,8 @@ values from then on.
 
 `peakmark.baseline.json` has a `version`. peakmark reads versions 1 and 2 and writes 2.
 
+- **Inventory** is an optional field of an entry in version 2 and does not raise the version: older
+  peakmark versions ignore it, and this one reads an entry without it.
 - **Version 1** (peakmark 0.1) has module values only. It is read as it is: sizes and the
   module-wide memory values are compared as before, and every scenario shows as
   `baseline/scenario-new`. `accept` replaces the entry of the module it accepts with a version 2

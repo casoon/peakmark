@@ -6,8 +6,9 @@ order: 3
 
 peakmark reads the inventory of every module it checks. It comes from the bytes of the artifact
 alone: nothing is instantiated, no glue runs, and Node is not involved. `check --details` prints it
-and `check --json` carries it under `inventory` for each module. The inventory never fails a check
-and is not part of the baseline.
+and `check --json` carries it under `inventory` for each module. The inventory alone never fails a check.
+`accept` keeps a compact part of it in the baseline, `check` reports what differs from it, and only
+an optional [policy](#policy) can turn the inventory into an error.
 
 The artifact is validated first. A module that is invalid, uses a feature outside WebAssembly 3.0,
 or is a WebAssembly component stops the check with exit code 2 before an inventory exists; see
@@ -106,6 +107,82 @@ Two things lower the coverage further, and are reported as such, never as "not u
 `complete` is `true` only when both are empty; the limits above apply anyway. A feature that
 validation does not accept does not get this far: it stops the check with exit code 2 as
 unsupported.
+
+## Against the baseline
+
+`peakmark accept` stores a snapshot of the inventory with the entry of the module (`inventory` in
+[the baseline](../budget-and-baseline/#what-the-baseline-stores)): the imports and exports with
+their types, the memories and tables the module keeps to itself, and the names of the derived
+features. It is sorted, so reordering a module changes nothing, and an entry accepted before it was
+kept has none: `check` notes that (`baseline/inventory-missing`) and compares nothing, never an
+empty inventory.
+
+`check` compares the snapshot with the module as it is now and reports each difference as a
+warning, with exit code 0, until the baseline is accepted again:
+
+| Rule | Meaning |
+|---|---|
+| `baseline/interface-added` | an import, export, internal memory or table that was not accepted |
+| `baseline/interface-removed` | an accepted one that is gone |
+| `baseline/interface-changed` | the same declaration with another signature or other limits; the finding shows both |
+| `baseline/feature-added` | the binary needs a feature it did not need when accepted |
+| `baseline/feature-removed` | it no longer needs one |
+
+### Identity
+
+A declaration is identified by import module (imports only), name and kind, never by the name
+alone: `env.f` as a function and `env.f` as a memory are two imports, and `a.f` and `b.f` are not
+the same import. Under an identity, the type is what can change. A signature change is one
+`interface-changed` finding, not a removal and an addition; a change of kind or module is both. A
+module that imports the same module, name and kind several times with different types is compared
+as a set of types.
+
+A memory or table that is imported or exported is an import or an export, with its limits as the
+type, so a changed maximum is reported once. Only those the module keeps to itself are listed
+apart, named by their position (`#0`, `#1`) among them. Limits are written `min..max` in pages for
+a memory (`1..` has no maximum, then `shared`, `64-bit` and a non-default `page-size`) and
+`funcref 1..16` for a table.
+
+### What a host-interface change means
+
+A new import means the module asks the host for one more binding; a removed export means callers
+lose one. That is all the inventory states. An import name does not show what the host does with it:
+a `fetch` import may be wired to anything or to nothing, and the filesystem or network access of a
+WASI module depends on the host implementation and the grants it is given. An empty import list is
+not a safety statement either, and neither is the absence of a violation. peakmark makes no
+security statement, and compatibility with a runtime or browser is unknown: it is only tied to what
+the file contains, never to a list of engines.
+
+## Policy
+
+A policy turns parts of the inventory into a gate. It is opt-in per module, in
+[`[module.policy]`](../../reference/configuration/):
+
+```toml
+[module.policy]
+require_exports = [{ name = "add", signature = "(i32, i32) -> i32" }]
+allow_imports   = [{ module = "env", name = "log", signature = "(i32) -> ()" }]
+allow_features  = ["bulk_memory"]
+```
+
+A broken rule is an error: exit code 1, and `accept` refuses the module (exit code 2) until the
+module or the policy is changed. Accepting a baseline does not waive a policy, just as it does not
+waive an absolute size budget. Each finding names the declaration and the action to take, and
+`--json` carries both under `violations`.
+
+| Rule | Broken when |
+|---|---|
+| `policy/export-missing` | a required export is not there |
+| `policy/export-signature` | it is there as another signature, or is not a function; the finding shows what it is |
+| `policy/import-not-allowed` | `allow_imports` is set and the import is not listed (a listed name from another module does not count) |
+| `policy/import-signature` | the import is listed, but not with this type |
+| `policy/feature-not-allowed` | `allow_features` is set and the binary needs another feature |
+| `policy/feature-unverifiable` | `allow_features` is set and instructions of a proposal peakmark has no feature for exist (`unclassified_instructions`), so it cannot show that all features are allowed |
+
+Strict means: what is not listed is refused, and what peakmark cannot classify is not assumed to be
+allowed. An absent key gates nothing; a present key, even an empty one, is a complete list. A
+policy is about the bytes of the file. It does not say that the host grants an allowed import
+anything, that a required export works, or that the module is secure.
 
 ## JSON schema
 

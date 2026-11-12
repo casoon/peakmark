@@ -16,10 +16,12 @@ src/
 ├── lib.rs         crate documentation and the module list
 ├── cli/           arguments (args.rs), commands (commands.rs), exit codes (mod.rs)
 ├── config.rs      peakmark.toml: modules, budgets, scenarios, validation
-├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values and trace, contract) and the history log
+├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values and trace, contract, inventory snapshot) and the history log
 ├── measure.rs     one module in, one Measured out
 ├── wasm.rs        validation, sections and declared memory, read with wasmparser
 ├── inventory.rs   the static inventory: interface, memories, derived features, sections, metadata
+├── snapshot.rs    the inventory as the baseline keeps it, and the diff of two: Snapshot, Drift
+├── policy.rs      [module.policy]: required exports, allowed imports and features, Violation
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
 ├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
@@ -47,13 +49,15 @@ tests/
    the tolerance is a warning. Budgets judge the module-wide values; the baseline judges size per
    module and memory per scenario. Where the baseline and the measurement no longer line up
    (a scenario removed or new, a metric no longer measured, a measurement that cannot be compared)
-   it records a `Change` instead of a number.
+   it records a `Change` instead of a number. The inventory is compared as well: `snapshot::diff`
+   of the accepted `Snapshot` and the measured one becomes `Change::Interface`, and the module's
+   `Policy` is evaluated into `Violation`s, which fail the check like a budget.
 5. `report::report` or `report::json` turns the results into the output; `check::verdict` decides
    the exit code.
 
 `peakmark accept` runs steps 1 to 3 for the chosen modules, refuses a module that is over its
-budget, then `baseline::save` and `baseline::append_history` store the entry (`Entry::from_measured`:
-module values, per-scenario values, contract) and the reason.
+budget or breaks its policy, then `baseline::save` and `baseline::append_history` store the entry (`Entry::from_measured`:
+module values, per-scenario values, contract, inventory snapshot) and the reason.
 
 ## Responsibilities
 
@@ -68,9 +72,13 @@ module values, per-scenario values, contract) and the reason.
 - **The inventory is a model, not text.** `inventory` reads a validated module into typed data
   (`Inventory`) that `report` formats and `--json` serialises. Later parts (drift, size
   attribution, explanations) use the model, not the output. It states what the bytes contain;
-  `Coverage` states what it could not decide, and a gap is never "not used". It is not part of the
-  baseline.
-- **Only `check` decides** what is an error and what is a warning. `report` formats those decisions
+  `Coverage` states what it could not decide, and a gap is never "not used". The baseline keeps a
+  `snapshot::Snapshot` of it, not the model: compact, sorted, with an identity per declaration
+  (module, name, kind), and extensible by optional fields for later parts such as section sizes.
+  Differences are warnings; only a `policy::Policy` that the project configured fails the check, and
+  it is strict about what it cannot classify.
+- **Only `check` decides** what is an error and what is a warning. A policy `Violation` is an error
+  and no baseline waives it; an inventory difference is a warning. `report` formats those decisions
   and does not make its own.
 - **Only `error` owns message text.** Modules return `Error` variants that carry the path or name
   involved; `Display` renders the sentence the command prints. Exit code 2 always means an `Error`.
@@ -86,7 +94,7 @@ module values, per-scenario values, contract) and the reason.
 |---|---|
 | `wasmparser` | validation, sections, memory and inventory of a module |
 | `flate2`, `brotli` | gzip and brotli length |
-| `serde`, `serde_json`, `toml` | configuration, baseline, runner protocol, `--json` |
+| `serde`, `serde_json`, `toml` | configuration (including the policy), baseline, runner protocol, `--json` |
 | `runemark` | report layout, colors and the error block |
 
 Dev-only: `wat` builds the modules the tests use.

@@ -27,6 +27,20 @@ change the configuration, the baseline format or the output.
   derived features with what cannot be detected, sections and custom sections. Details:
   [Inventory](https://casoon.github.io/peakmark/docs/concepts/inventory/).
 - **Library:** `peakmark::inventory::Inventory` is the typed, versioned model behind it.
+- **Baseline:** `accept` keeps a compact, sorted snapshot of the inventory (imports, exports,
+  internal memories and tables, needed features) in the entry of the module; the format stays
+  version 2 and entries without it still read. Details:
+  [What the baseline stores](https://casoon.github.io/peakmark/docs/concepts/budget-and-baseline/#what-the-baseline-stores).
+- **Inventory:** `check` reports added, removed and changed imports, exports, memory and table
+  limits and needed features against the accepted inventory as warnings with exit code 0, with
+  before and after in `--json`; a module is identified by import module, name and kind. Details:
+  [Against the baseline](https://casoon.github.io/peakmark/docs/concepts/inventory/#against-the-baseline).
+- **Config:** an optional `[module.policy]` with `require_exports`, `allow_imports` and
+  `allow_features` fails the check when broken; accepting the baseline does not waive it, and what
+  peakmark cannot classify is refused. Details:
+  [Policy](https://casoon.github.io/peakmark/docs/concepts/inventory/#policy).
+- **Library:** `peakmark::snapshot` and `peakmark::policy` hold the stored inventory, its diff and
+  the policy evaluation.
 
 ### Changed
 
