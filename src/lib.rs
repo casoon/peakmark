@@ -41,6 +41,7 @@ pub mod inventory;
 pub mod measure;
 pub mod metric;
 pub mod policy;
+pub mod reach;
 pub mod report;
 pub mod runner;
 pub mod snapshot;

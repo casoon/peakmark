@@ -627,6 +627,16 @@ impl FunctionBody {
     pub fn local_id(&self) -> String {
         format!("func[{}]", self.index)
     }
+
+    /// What names the function in a report: its `name`, else its first
+    /// export, else [`FunctionBody::local_id`].
+    #[must_use]
+    pub fn label(&self) -> String {
+        self.name
+            .clone()
+            .or_else(|| self.exported_as.first().map(|e| format!("export \"{e}\"")))
+            .unwrap_or_else(|| self.local_id())
+    }
 }
 
 /// The defined functions of the module.
@@ -642,6 +652,19 @@ pub struct Functions {
     /// Every body in code order. Not serialized: it is the model for later parts.
     #[serde(skip)]
     pub bodies: Vec<FunctionBody>,
+}
+
+impl Functions {
+    /// The body of the function with this index in the function index space;
+    /// `None` for an imported function or an index past the end.
+    #[must_use]
+    pub fn body(&self, index: u32) -> Option<&FunctionBody> {
+        let at = self
+            .bodies
+            .binary_search_by_key(&index, |body| body.index)
+            .ok()?;
+        Some(&self.bodies[at])
+    }
 }
 
 /// A data segment: how large it is and where it goes, never what it holds.

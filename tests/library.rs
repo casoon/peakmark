@@ -240,3 +240,101 @@ fn drift_and_policy_come_from_the_inventory_of_the_measured_file() {
             .any(|change| matches!(change, Change::Interface(_)))
     );
 }
+
+// The reference graph: the same program in two builds, and a module of realistic size.
+
+/// The path to `target`, as names: stable across builds, unlike indexes.
+fn named_path(wat: &str, target: &str) -> Vec<String> {
+    use peakmark::inventory::Inventory;
+    use peakmark::reach::{Node, Reach};
+
+    let bytes = wat::parse_str(wat).unwrap();
+    let inventory = Inventory::from_bytes(&bytes).unwrap();
+    let index = inventory
+        .functions
+        .bodies
+        .iter()
+        .find(|body| body.name.as_deref() == Some(target))
+        .unwrap()
+        .index;
+    let explanation = Reach::from_bytes(&bytes).unwrap().explain(index).unwrap();
+    explanation
+        .path
+        .iter()
+        .map(|hop| match hop.node {
+            Node::Function(index) => inventory.functions.body(index).unwrap().label(),
+            Node::Table => "table".to_string(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_path_is_the_same_when_the_indexes_moved_between_two_builds() {
+    let before = named_path(
+        r#"(module
+            (func $main (export "main") call $mid)
+            (func $mid call $big)
+            (func $big))"#,
+        "big",
+    );
+    // Same program, functions in another order and one function added in front.
+    let after = named_path(
+        r#"(module
+            (func $big)
+            (func $added nop)
+            (func $mid call $big)
+            (func $main (export "main") call $mid))"#,
+        "big",
+    );
+
+    assert_eq!(before, ["main", "mid", "big"]);
+    assert_eq!(before, after);
+}
+
+#[test]
+fn a_large_module_is_analysed_in_one_pass() {
+    use peakmark::reach::{Reach, Reachability};
+    use std::fmt::Write;
+
+    // About 1.5 MB of code: a call chain through every tenth function, a
+    // table of every seventh, and functions nothing refers to.
+    const FUNCTIONS: usize = 20_000;
+    let mut wat = String::from("(module (type $t (func)) (table 1 funcref)\n");
+    wat.push_str("(elem (i32.const 0)");
+    for i in (0..FUNCTIONS).step_by(7) {
+        write!(wat, " $f{i}").unwrap();
+    }
+    wat.push_str(
+        ")\n(func $entry (export \"run\") call $f0 (call_indirect (type $t) (i32.const 0)))\n",
+    );
+    for i in 0..FUNCTIONS {
+        write!(wat, "(func $f{i}").unwrap();
+        for _ in 0..12 {
+            wat.push_str(" i32.const 1 i32.const 2 i32.add drop");
+        }
+        if i % 10 == 0 && i + 10 < FUNCTIONS {
+            write!(wat, " call $f{}", i + 10).unwrap();
+        }
+        wat.push_str(")\n");
+    }
+    wat.push(')');
+    let bytes = wat::parse_str(&wat).unwrap();
+    assert!(bytes.len() > 1_000_000, "{} bytes", bytes.len());
+
+    let started = std::time::Instant::now();
+    let reach = Reach::from_bytes(&bytes).unwrap();
+    let report = reach.report(1..=20);
+    let elapsed = started.elapsed();
+    println!(
+        "reach on {} bytes, {} functions: {elapsed:?}",
+        bytes.len(),
+        reach.function_count()
+    );
+
+    assert_eq!(report.explanations.len(), 20);
+    let far = reach.explain(1 + 10 * 1_000).unwrap();
+    assert_eq!(far.reachability, Reachability::Direct);
+    assert_eq!(far.path.len(), 1_002);
+    // Generous: the point is that nothing is quadratic.
+    assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+}
