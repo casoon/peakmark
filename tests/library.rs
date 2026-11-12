@@ -338,3 +338,36 @@ fn a_large_module_is_analysed_in_one_pass() {
     // Generous: the point is that nothing is quadratic.
     assert!(elapsed.as_secs() < 5, "{elapsed:?}");
 }
+
+#[test]
+fn explanations_come_with_the_result_and_never_change_the_verdict() {
+    use peakmark::explain::{MAX_EXPLANATIONS, Status};
+
+    let dir = project("lib-explain", MODULE, 4);
+    let config = config::load(&dir.join("peakmark.toml")).unwrap();
+    let first = measure(&config, &config.modules[0]).unwrap();
+    let entry = baseline::Entry::from_measured(&first, "test");
+
+    // First run: the composition, with no growth claimed.
+    let measured = measure(&config, &config.modules[0]).unwrap();
+    let result = evaluate(&config.modules[0], measured, None, config.tolerance);
+    let rules: Vec<_> = result.explanations.listed.iter().map(|e| e.rule).collect();
+    assert_eq!(rules, ["explain/composition"]);
+    assert_eq!(result.explanations.listed[0].status, Status::Exact);
+
+    // The same file against its own baseline: nothing changed, nothing to explain.
+    let measured = measure(&config, &config.modules[0]).unwrap();
+    let same = evaluate(&config.modules[0], measured, Some(&entry), config.tolerance);
+    assert_eq!(same.explanations.listed.len(), 0);
+
+    // More data: one explanation, and the verdict inputs are the ones without it.
+    project("lib-explain", MODULE, 400);
+    let measured = measure(&config, &config.modules[0]).unwrap();
+    let grown = evaluate(&config.modules[0], measured, Some(&entry), config.tolerance);
+    let rules: Vec<_> = grown.explanations.listed.iter().map(|e| e.rule).collect();
+    assert_eq!(rules, ["explain/data-growth"]);
+    assert!(grown.explanations.listed.len() <= MAX_EXPLANATIONS);
+    assert!(grown.grown());
+    assert!(!grown.over_budget());
+    assert!(grown.issues.iter().any(|issue| issue.metric == Metric::Raw));
+}

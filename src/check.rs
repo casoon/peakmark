@@ -7,6 +7,7 @@ use runemark::Verdict;
 use crate::baseline::Entry;
 use crate::compress::SETTINGS;
 use crate::config::Module;
+use crate::explain::{Explained, explain};
 use crate::inventory::Inventory;
 use crate::measure::Measured;
 use crate::metric::Metric;
@@ -175,6 +176,9 @@ pub struct ModuleResult<'a> {
     /// The rules of the module's policy that the inventory breaks. They fail
     /// the check, and no baseline waives them.
     pub violations: Vec<Violation>,
+    /// The best explanations of the findings above, from evidence already
+    /// held. They never change a verdict.
+    pub explanations: Explained,
 }
 
 impl ModuleResult<'_> {
@@ -255,14 +259,17 @@ pub fn evaluate<'a>(
         compare_module(entry, &measured, &mut changes);
     }
     let violations = evaluate_policy(&module.policy, &measured.inventory);
-    ModuleResult {
+    let mut result = ModuleResult {
         module,
         measured,
         baseline,
         issues,
         changes,
         violations,
-    }
+        explanations: Explained::default(),
+    };
+    result.explanations = explain(&result);
+    result
 }
 
 fn compression_differs(entry: &Entry) -> bool {
@@ -272,7 +279,7 @@ fn compression_differs(entry: &Entry) -> bool {
         .is_some_and(|c| c.compression != SETTINGS)
 }
 
-fn runner_differs(entry: &Entry) -> bool {
+pub(crate) fn runner_differs(entry: &Entry) -> bool {
     entry
         .contract
         .as_ref()
