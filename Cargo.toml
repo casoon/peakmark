@@ -1,6 +1,6 @@
 [package]
 name = "peakmark"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Gate WebAssembly modules on size and memory against a baseline kept in the repository"
 license = "MIT"

@@ -6,6 +6,14 @@ change the configuration, the baseline format or the output.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-12
+
+### Changed
+
+- **Release:** the binaries are built and published by the release workflow, with SHA-256
+  checksums, signed build provenance and an SBOM; the crate is published by trusted publishing.
+  0.1.0 was the first upload of the crate and has no binaries.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added
