@@ -257,3 +257,38 @@ fn a_scenario_that_throws_stops_the_check_with_its_message() {
     assert_contains(&run.stderr, "scenario failing.mjs failed");
     assert_contains(&run.stderr, "the scenario broke");
 }
+
+#[test]
+fn a_command_line_that_does_not_parse_exits_with_2_and_points_at_the_usage() {
+    let project = Project::new("usage", &config("", "steady.mjs", 1));
+    let run = project.run(&["bogus"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "unknown command `bogus`");
+    assert_contains(&run.stderr, "peakmark --help");
+}
+
+#[test]
+fn a_missing_configuration_exits_with_2() {
+    let project = Project::new("no-config", &config("", "steady.mjs", 1));
+    let run = project.run(&["check", "--config", "elsewhere.toml"]);
+
+    assert_eq!(run.code, 2);
+    assert_contains(&run.stderr, "cannot read elsewhere.toml");
+}
+
+#[test]
+fn help_and_version_print_to_stdout() {
+    let project = Project::new("help", &config("", "steady.mjs", 1));
+
+    let help = project.run(&["--help"]);
+    assert_eq!(help.code, 0);
+    assert_contains(&help.stdout, "Exit codes: 0 within budget");
+
+    let version = project.run(&["--version"]);
+    assert_eq!(version.code, 0);
+    assert_contains(
+        &version.stdout,
+        concat!("peakmark ", env!("CARGO_PKG_VERSION")),
+    );
+}
