@@ -32,7 +32,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use wasmparser::{
     BinaryReader, BinaryReaderError, BlockType, ConstExpr, DataKind, ElementItems, ElementKind,
     ExternalKind, HeapType, KnownCustom, Name, Operator, Parser, Payload, RecGroup, RefType,
@@ -431,7 +431,7 @@ pub struct Tag {
 }
 
 /// A core feature a binary can need. The order is the order of the output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {
     /// 128-bit vector instructions and the `v128` type.

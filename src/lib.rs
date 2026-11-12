@@ -42,6 +42,7 @@ pub mod measure;
 pub mod metric;
 pub mod report;
 pub mod runner;
+pub mod snapshot;
 pub mod units;
 pub mod wasm;
 

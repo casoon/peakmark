@@ -18,6 +18,7 @@ use crate::error::Error;
 use crate::measure::Measured;
 use crate::metric::Values;
 use crate::runner::{RUNNER_SCHEMA, Unobserved, WARMUP_RUNS};
+use crate::snapshot::Snapshot;
 
 /// The baseline file, next to the configuration.
 pub const BASELINE_FILE: &str = "peakmark.baseline.json";
@@ -52,6 +53,10 @@ pub struct Entry {
     /// Empty in entries from format 1 and for modules without scenarios.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scenarios: BTreeMap<String, ScenarioEntry>,
+    /// The inventory the module was accepted with. Absent in entries accepted
+    /// before it was kept; never read as an empty inventory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<Snapshot>,
 }
 
 /// The measurement contract an entry was accepted under. A difference in
@@ -130,6 +135,7 @@ impl Entry {
                     )
                 })
                 .collect(),
+            inventory: Some(Snapshot::from_inventory(&measured.inventory)),
         }
     }
 }
@@ -241,7 +247,31 @@ mod tests {
             },
             contract: None,
             scenarios: BTreeMap::new(),
+            inventory: None,
         }
+    }
+
+    #[test]
+    fn an_entry_without_an_inventory_reads_as_none_and_is_saved_without_one() {
+        let text = r#"{"accepted":"2026-01-02","reason":"first","values":{"raw":10}}"#;
+        let entry: Entry = serde_json::from_str(text).unwrap();
+        assert!(entry.inventory.is_none());
+        assert!(!serde_json::to_string(&entry).unwrap().contains("inventory"));
+    }
+
+    #[test]
+    fn the_inventory_is_stored_sorted_and_compact() {
+        let bytes = wat::parse_str(
+            r#"(module (import "env" "log" (func (param i32)))
+                (func (export "b")) (func (export "a") (result i32) i32.const 0))"#,
+        )
+        .unwrap();
+        let inventory = crate::inventory::Inventory::from_bytes(&bytes).unwrap();
+        let text = serde_json::to_string(&Snapshot::from_inventory(&inventory)).unwrap();
+        assert_eq!(
+            text,
+            r#"{"imports":[{"module":"env","name":"log","kind":"func","type":"(i32) -> ()"}],"exports":[{"name":"a","kind":"func","type":"() -> i32"},{"name":"b","kind":"func","type":"() -> ()"}]}"#
+        );
     }
 
     #[test]
