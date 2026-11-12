@@ -37,7 +37,7 @@ It refuses a missing reason and a module that is over its budget.
 | Option | Meaning |
 |---|---|
 | `--config <file>` | configuration file, `peakmark.toml` by default |
-| `--details` | `check`: also list the measured values |
+| `--details` | `check`: also list the measured values and the [inventory](../../concepts/inventory/) of every module |
 | `--json` | `check`: print JSON instead of the report |
 | `--all` | `accept`: every configured module |
 | `--reason <text>` | `accept`: why the baseline changes |
@@ -65,4 +65,5 @@ has its `values`, `budget`, `baseline` (the accepted module values), `baseline_s
 `baseline_contract` (`null` for a baseline from format 1 or none), the `scenarios` measured
 (with `repeat`, `sha256` and `node`), the `issues` that are over budget or past the baseline, and
 `changes`: one object per finding about coverage, with its `rule`, a `level` of `warning` or `note`
-and the `detail` of what changed.
+and the `detail` of what changed. `inventory` is the static inventory of the artifact, with its own
+`schema_version`; see [Inventory](../../concepts/inventory/).

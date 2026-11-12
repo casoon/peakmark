@@ -113,6 +113,8 @@ described under [Budget and baseline](../budget-and-baseline/#what-can-still-be-
 
 `--json` also carries the memory the module declares, the size of its code, data and custom
 sections, and the time instantiation took. These values are reported and never fail a check.
+What the module imports, exports and requires is the [inventory](../inventory/), read from the file
+without running it.
 
 ## Compression
 

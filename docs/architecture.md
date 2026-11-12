@@ -19,6 +19,7 @@ src/
 ├── baseline.rs    peakmark.baseline.json (format 2: per-scenario values and trace, contract) and the history log
 ├── measure.rs     one module in, one Measured out
 ├── wasm.rs        validation, sections and declared memory, read with wasmparser
+├── inventory.rs   the static inventory: interface, memories, derived features, sections, metadata
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
 ├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
@@ -40,7 +41,7 @@ tests/
 1. `cli::args` parses the arguments into a `Cli`.
 2. `config::load` reads `peakmark.toml`; `baseline::load` reads the baseline next to it.
 3. For each configured module, `measure::measure` reads the artifact, asks `wasm::inspect` for its
-   sections and declared memory, `compress` for the gzip and brotli length, and `runner` for the
+   sections, declared memory and `Inventory`, `compress` for the gzip and brotli length, and `runner` for the
    memory after each scenario. The result is a `Measured`.
 4. `check::evaluate` judges every value: over the budget is an error, past the baseline by more than
    the tolerance is a warning. Budgets judge the module-wide values; the baseline judges size per
@@ -64,6 +65,11 @@ module values, per-scenario values, contract) and the reason.
   counts a shared memory once, and reports what it could not watch. `runner.rs` adds what only the
   artifact knows (declared memories, via `wasm`) and turns that into `Coverage`; `check` shows it
   as a note and never as a number.
+- **The inventory is a model, not text.** `inventory` reads a validated module into typed data
+  (`Inventory`) that `report` formats and `--json` serialises. Later parts (drift, size
+  attribution, explanations) use the model, not the output. It states what the bytes contain;
+  `Coverage` states what it could not decide, and a gap is never "not used". It is not part of the
+  baseline.
 - **Only `check` decides** what is an error and what is a warning. `report` formats those decisions
   and does not make its own.
 - **Only `error` owns message text.** Modules return `Error` variants that carry the path or name
@@ -78,7 +84,7 @@ module values, per-scenario values, contract) and the reason.
 
 | Crate | Used for |
 |---|---|
-| `wasmparser` | sections and memory of a module |
+| `wasmparser` | validation, sections, memory and inventory of a module |
 | `flate2`, `brotli` | gzip and brotli length |
 | `serde`, `serde_json`, `toml` | configuration, baseline, runner protocol, `--json` |
 | `runemark` | report layout, colors and the error block |

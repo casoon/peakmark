@@ -22,6 +22,11 @@ change the configuration, the baseline format or the output.
   a module run in a worker) is reported as a `memory/coverage` note and under `coverage` in
   `--json`, never as zero. Details:
   [What is not observed](https://casoon.github.io/peakmark/docs/concepts/measurements/#what-is-not-observed).
+- **Inventory:** `check --details` and `--json` list what each module imports, exports and
+  requires, read from the file without running it: typed interface, memory and table limits,
+  derived features with what cannot be detected, sections and custom sections. Details:
+  [Inventory](https://casoon.github.io/peakmark/docs/concepts/inventory/).
+- **Library:** `peakmark::inventory::Inventory` is the typed, versioned model behind it.
 
 ### Changed
 
