@@ -1,5 +1,7 @@
 //! SHA-256, to identify artifacts and scenario scripts in the baseline.
 
+use std::fmt::Write;
+
 const K: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -68,6 +70,8 @@ const K: [u32; 64] = [
 ];
 
 /// The SHA-256 of `bytes` as 64 lowercase hex digits.
+// The working variables keep the names of FIPS 180-4, which the code is checked against.
+#[allow(clippy::many_single_char_names)]
 #[must_use]
 pub(crate) fn sha256(bytes: &[u8]) -> String {
     let mut state: [u32; 8] = [
@@ -87,10 +91,10 @@ pub(crate) fn sha256(bytes: &[u8]) -> String {
     }
     padded.extend_from_slice(&(bytes.len() as u64 * 8).to_be_bytes());
 
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (i, word) in block.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        for (slot, word) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(*word);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
@@ -125,7 +129,10 @@ pub(crate) fn sha256(bytes: &[u8]) -> String {
             *slot = slot.wrapping_add(value);
         }
     }
-    state.iter().map(|word| format!("{word:08x}")).collect()
+    state.iter().fold(String::new(), |mut hex, word| {
+        let _ = write!(hex, "{word:08x}");
+        hex
+    })
 }
 
 #[cfg(test)]

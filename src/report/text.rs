@@ -1,6 +1,6 @@
 use runemark::{Finding, FindingGroup, Location, Metric as ReportMetric, NextStep, Report, Tone};
 
-use crate::check::{Issue, Level, ModuleResult, verdict};
+use crate::check::{Change, Issue, Level, ModuleResult, Reason, verdict};
 
 /// The report `check` prints. With `details`, it also lists every measured
 /// value.
@@ -18,12 +18,15 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
     #[allow(clippy::redundant_closure_for_method_calls)]
     let over = names(|result| result.over_budget());
     let grown = names(|result| !result.over_budget() && result.grown());
+    let drifted = names(|result| !result.over_budget() && !result.grown() && result.drifted());
     let unset = names(|result| result.baseline.is_none());
 
     let title = if !over.is_empty() {
         format!("over budget: {}", over.join(", "))
     } else if !grown.is_empty() {
         format!("grown past the baseline: {}", grown.join(", "))
+    } else if !drifted.is_empty() {
+        format!("baseline no longer matches: {}", drifted.join(", "))
     } else if !unset.is_empty() {
         format!("no baseline for {}", unset.join(", "))
     } else if results.len() == 1 {
@@ -43,7 +46,12 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
     let mut report = Report::new(format!("peakmark check: {title}"), verdict(results))
         .add_metric(ReportMetric::new("Modules", results.len().to_string()))
         .add_metric(count("Over budget", over.len(), Tone::Error))
-        .add_metric(count("Grown", grown.len(), Tone::Warning));
+        .add_metric(count("Grown", grown.len(), Tone::Warning))
+        .add_metric(count(
+            "Baseline drift",
+            results.iter().filter(|result| result.drifted()).count(),
+            Tone::Warning,
+        ));
 
     if details {
         let mut measured = FindingGroup::new("Measured");
@@ -65,13 +73,16 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
         for issue in &result.issues {
             group = group.add_finding(finding(issue));
         }
+        for change in &result.changes {
+            group = group.add_finding(change_finding(change));
+        }
         if result.baseline.is_none() {
             group = group.add_finding(
                 Finding::new(Tone::Warning, "No baseline accepted yet")
                     .with_rule_id("baseline/missing"),
             );
         }
-        if !result.issues.is_empty() || result.baseline.is_none() {
+        if !result.issues.is_empty() || !result.changes.is_empty() || result.baseline.is_none() {
             report = report.add_group(group);
         }
     }
@@ -83,7 +94,10 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
     }
     let to_accept: Vec<&str> = results
         .iter()
-        .filter(|result| !result.over_budget() && (result.grown() || result.baseline.is_none()))
+        .filter(|result| {
+            !result.over_budget()
+                && (result.grown() || result.drifted() || result.baseline.is_none())
+        })
         .map(|result| result.module.name.as_str())
         .collect();
     if !to_accept.is_empty() {
@@ -106,7 +120,7 @@ fn finding(issue: &Issue) -> Finding {
             Tone::Error,
             format!("{label} {value}, budget {}", metric.format(issue.limit)),
         ),
-        Level::Warning => (
+        Level::Warning | Level::Note => (
             Tone::Warning,
             format!(
                 "{label} {value}, +{} over the baseline",
@@ -119,6 +133,46 @@ fn finding(issue: &Issue) -> Finding {
         Some(scenario) => finding.with_location(Location::file(scenario)),
         None => finding,
     }
+}
+
+fn change_finding(change: &Change) -> Finding {
+    let message = match change {
+        Change::ScenarioRemoved { scenario } => {
+            format!("Scenario {scenario} is in the baseline and is no longer measured")
+        }
+        Change::ScenarioNew { scenario } => {
+            format!("Scenario {scenario} has no accepted values yet")
+        }
+        Change::MetricMissing { metric } => format!(
+            "{} was accepted and is not measured now",
+            capitalize(metric.label())
+        ),
+        Change::Incomparable { scenario, reason } => {
+            let why = match reason {
+                Reason::ScenarioEdited => "its script changed since it was accepted".to_string(),
+                Reason::RepeatChanged { was, now } => {
+                    format!("it runs {now} times, accepted with {was}")
+                }
+                Reason::Compression => {
+                    "gzip and brotli ran with other settings than the baseline".to_string()
+                }
+                Reason::Runner => "memory is measured differently than at the baseline".to_string(),
+            };
+            match (scenario, reason) {
+                (Some(scenario), _) => format!("Scenario {scenario} is not compared: {why}"),
+                (None, Reason::Compression) => format!("Sizes are not compared: {why}"),
+                (None, _) => format!("Memory is not compared: {why}"),
+            }
+        }
+        Change::RuntimeChanged { was, now } => {
+            format!("Node {now}, accepted with {was}; values stay comparable")
+        }
+    };
+    let tone = match change.level() {
+        Level::Note => Tone::Info,
+        _ => Tone::Warning,
+    };
+    Finding::new(tone, message).with_rule_id(change.rule())
 }
 
 fn capitalize(text: &str) -> String {
