@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, Module, Scenario};
+use crate::digest::sha256;
 use crate::error::Error;
 
 const RUNNER: &str = include_str!("runner.mjs");
@@ -44,7 +45,29 @@ pub struct ScenarioResult {
     pub growth_per_run: Option<u64>,
     /// Milliseconds instantiation took.
     pub instantiate_ms: f64,
+    /// How often the script ran on the instance.
+    pub repeat: u32,
+    /// SHA-256 of the scenario script, to tell an edited scenario from a changed module.
+    pub sha256: String,
+    /// The Node version that ran it, such as `v22.4.0`.
+    pub node: String,
 }
+
+impl ScenarioResult {
+    /// The identity of the scenario within its module: the script as configured,
+    /// with `/` as separator on every platform.
+    #[must_use]
+    pub fn id(&self) -> String {
+        self.file.to_string_lossy().replace('\\', "/")
+    }
+}
+
+/// The version of the measurement protocol: what `runner.mjs` reads and what
+/// `growth_per_run` and `peak_memory` mean. A baseline taken under another
+/// version is not comparable for memory.
+pub const RUNNER_SCHEMA: u32 = 1;
+/// Runs at the start of a scenario that are not counted in `growth_per_run`.
+pub const WARMUP_RUNS: u32 = 1;
 
 #[derive(Serialize)]
 struct Job {
@@ -60,6 +83,7 @@ struct RunnerResult {
     after_instantiate: u64,
     after_run: Vec<u64>,
     instantiate_ms: f64,
+    node: String,
 }
 
 /// Runs `scenario` against `module` in Node.
@@ -85,6 +109,11 @@ pub fn run_scenario(
         scenario: absolute(&scenario.file)?,
         repeat: scenario.repeat,
     };
+
+    let script = std::fs::read(&job.scenario).map_err(|source| Error::Read {
+        path: scenario.file.clone(),
+        source,
+    })?;
 
     let mut command = Command::new("node");
     command
@@ -158,7 +187,10 @@ pub fn run_scenario(
             scenario: scenario.file.clone(),
             source,
         })?;
-    Ok(summarise(&scenario.file, &result))
+    Ok(ScenarioResult {
+        sha256: sha256(&script),
+        ..summarise(&scenario.file, &result)
+    })
 }
 
 enum Stream {
@@ -293,6 +325,9 @@ fn summarise(file: &Path, result: &RunnerResult) -> ScenarioResult {
         // The first run may fill caches and pools; growth is what the runs after it add.
         growth_per_run: (later_runs > 0).then(|| (last - first) / later_runs),
         instantiate_ms: result.instantiate_ms,
+        repeat: result.after_run.len() as u32,
+        sha256: String::new(),
+        node: result.node.clone(),
     }
 }
 
@@ -305,6 +340,7 @@ mod tests {
             after_instantiate: 65_536,
             after_run: after_run.to_vec(),
             instantiate_ms: 1.0,
+            node: "v22.0.0".to_string(),
         }
     }
 

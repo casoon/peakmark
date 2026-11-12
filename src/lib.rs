@@ -35,6 +35,7 @@ pub mod cli;
 mod compress;
 pub mod config;
 mod date;
+mod digest;
 pub mod error;
 pub mod measure;
 pub mod metric;

@@ -107,6 +107,13 @@ pub enum ConfigError {
     Value(ParseError),
     /// A scenario runs zero times.
     ZeroRepeat(PathBuf),
+    /// A module lists the same scenario file twice, so its identity would not be stable.
+    DuplicateScenario {
+        /// The module.
+        module: String,
+        /// The scenario script.
+        file: PathBuf,
+    },
     /// A scenario or `scenario_timeout` allows no time at all.
     ZeroTimeout(String),
     /// A scenario names a module that is not configured.
@@ -129,6 +136,11 @@ impl fmt::Display for ConfigError {
             Self::DuplicateModule(name) => write!(f, "module `{name}` is configured twice"),
             Self::Value(error) => error.fmt(f),
             Self::ZeroRepeat(file) => write!(f, "scenario {} has repeat = 0", file.display()),
+            Self::DuplicateScenario { module, file } => write!(
+                f,
+                "module `{module}` lists scenario {} twice",
+                file.display()
+            ),
             Self::ZeroTimeout(what) => write!(f, "{what} has a timeout of zero"),
             Self::UnknownScenarioModule { file, module } => write!(
                 f,
@@ -240,6 +252,16 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, ConfigError> {
                 module: scenario.module,
             });
         };
+        if module
+            .scenarios
+            .iter()
+            .any(|known| known.file == scenario.file)
+        {
+            return Err(ConfigError::DuplicateScenario {
+                module: module.name.clone(),
+                file: scenario.file,
+            });
+        }
         let timeout = deadline(&scenario.timeout, &|| {
             format!("scenario {}", scenario.file.display())
         })?
@@ -359,6 +381,22 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(never, ConfigError::ZeroRepeat(PathBuf::from("s.mjs")));
+    }
+
+    #[test]
+    fn refuses_the_same_scenario_file_twice_in_one_module() {
+        let scenario = "[[scenario]]\nmodule = 'a'\nfile = 's.mjs'\n";
+        let error = parse(&format!(
+            "[[module]]\nname = 'a'\nartifact = 'a.wasm'\n{scenario}{scenario}"
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::DuplicateScenario {
+                module: "a".to_string(),
+                file: PathBuf::from("s.mjs"),
+            }
+        );
     }
 
     #[test]

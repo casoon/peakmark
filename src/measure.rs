@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::compress::{brotli_len, gzip_len};
 use crate::config::{Config, Module};
+use crate::digest::sha256;
 use crate::error::Error;
 use crate::metric::{Metric, Values};
 use crate::runner::{ScenarioResult, run_scenario};
@@ -20,6 +21,9 @@ pub struct Measured {
     pub initial_memory: Option<u64>,
     /// One result per configured scenario.
     pub scenarios: Vec<ScenarioResult>,
+    /// SHA-256 of the artifact. It changes with every build and identifies
+    /// the file; it never decides whether values are comparable.
+    pub artifact_sha256: String,
 }
 
 impl Measured {
@@ -70,5 +74,6 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         sections: inspection.sections,
         initial_memory: inspection.initial_memory,
         scenarios,
+        artifact_sha256: sha256(&bytes),
     })
 }

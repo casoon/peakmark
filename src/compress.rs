@@ -2,6 +2,10 @@
 
 use std::io::Write;
 
+/// The settings of both encoders, as recorded in the baseline. A baseline taken
+/// with other settings is not comparable for gzip and brotli.
+pub(crate) const SETTINGS: &str = "gzip-9 brotli-11-w22";
+
 /// Length in bytes of `bytes` compressed with gzip at level 9.
 #[must_use]
 pub(crate) fn gzip_len(bytes: &[u8]) -> u64 {
