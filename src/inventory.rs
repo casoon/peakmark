@@ -48,6 +48,12 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Bytes before the first section: the magic number and the binary version.
 pub const PREAMBLE_BYTES: u64 = 8;
 
+/// How many of the largest function bodies the inventory lists.
+pub const LARGEST_FUNCTIONS: usize = 20;
+
+/// How many of the largest data segments the inventory lists.
+pub const LARGEST_DATA_SEGMENTS: usize = 5;
+
 /// Everything the artifact states about itself that peakmark reads.
 #[derive(Debug, Clone, Serialize)]
 pub struct Inventory {
@@ -77,6 +83,12 @@ pub struct Inventory {
     pub sections: Vec<Section>,
     /// The custom sections, a subset of [`Inventory::sections`] with their kind.
     pub custom_sections: Vec<CustomSection>,
+    /// The bytes of the file by purpose; the parts add up to the file size.
+    pub composition: Composition,
+    /// The function bodies and their shallow sizes.
+    pub functions: Functions,
+    /// The data segments and their sizes.
+    pub data: Data,
     /// The state of the `name` section.
     pub names: Names,
     /// The `producers` section, if any.
@@ -102,6 +114,9 @@ impl Default for Inventory {
             features: Vec::new(),
             sections: Vec::new(),
             custom_sections: Vec::new(),
+            composition: Composition::default(),
+            functions: Functions::default(),
+            data: Data::default(),
             names: Names::Absent,
             producers: Vec::new(),
             target_features: Vec::new(),
@@ -531,6 +546,129 @@ pub struct FeatureUse {
     pub instructions: u64,
 }
 
+/// The bytes of a file by purpose. Every byte is in exactly one part, so
+/// [`Composition::total`] is the size of the file.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Composition {
+    /// Payload of the code section: function bodies, their size prefixes and the count.
+    pub code: u64,
+    /// Payload of the data section.
+    pub data: u64,
+    /// Payload of the `name` custom section.
+    pub names: u64,
+    /// Payload of debug custom sections (`.debug_*`, `external_debug_info`, `sourceMappingURL`).
+    pub debug: u64,
+    /// Payload of every other custom section, `producers` and `target_features` included.
+    pub custom: u64,
+    /// Payload of the remaining sections: types, imports, functions, tables, memories, globals,
+    /// exports, start, elements, data count and tags.
+    pub structure: u64,
+    /// The preamble and the id and size field in front of every section.
+    pub overhead: u64,
+}
+
+impl Composition {
+    /// The sum of all parts: the size of the file.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.code
+            + self.data
+            + self.names
+            + self.debug
+            + self.custom
+            + self.structure
+            + self.overhead
+    }
+
+    fn of(sections: &[Section]) -> Self {
+        let mut composition = Composition {
+            overhead: PREAMBLE_BYTES,
+            ..Composition::default()
+        };
+        for section in sections {
+            composition.overhead += section.header;
+            let part = match section.kind {
+                SectionKind::Code => &mut composition.code,
+                SectionKind::Data => &mut composition.data,
+                SectionKind::Custom => {
+                    match CustomKind::of(section.name.as_deref().unwrap_or("")) {
+                        CustomKind::Names => &mut composition.names,
+                        CustomKind::Debug => &mut composition.debug,
+                        _ => &mut composition.custom,
+                    }
+                }
+                _ => &mut composition.structure,
+            };
+            *part += section.payload;
+        }
+        composition
+    }
+}
+
+/// The body of one defined function. The size is shallow: the bytes of this
+/// body (locals, instructions, end) without the size prefix in front of it, and
+/// without anything it calls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FunctionBody {
+    /// Index in the function index space: imported functions come first. It
+    /// identifies the function in this file only, never across two builds.
+    pub index: u32,
+    /// Bytes of the body.
+    pub size: u64,
+    /// The name from the `name` section, if there is one.
+    pub name: Option<String>,
+    /// The export names of the function, sorted.
+    pub exported_as: Vec<String>,
+}
+
+impl FunctionBody {
+    /// The identifier of the function in this file: `func[12]`.
+    #[must_use]
+    pub fn local_id(&self) -> String {
+        format!("func[{}]", self.index)
+    }
+}
+
+/// The defined functions of the module.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct Functions {
+    /// Number of defined functions.
+    pub count: u32,
+    /// The sum of all body sizes. [`Composition::code`] is this plus the size
+    /// prefixes and the count.
+    pub body_bytes: u64,
+    /// The [`LARGEST_FUNCTIONS`] largest bodies, biggest first; equal sizes by index.
+    pub largest: Vec<FunctionBody>,
+    /// Every body in code order. Not serialized: it is the model for later parts.
+    #[serde(skip)]
+    pub bodies: Vec<FunctionBody>,
+}
+
+/// A data segment: how large it is and where it goes, never what it holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DataSegment {
+    /// Index in the data section.
+    pub index: u32,
+    /// Bytes of the segment's contents.
+    pub size: u64,
+    /// The memory an active segment is copied to; `None` for a passive segment.
+    pub memory: Option<u32>,
+    /// The offset in that memory if it is a constant; `None` otherwise.
+    pub offset: Option<u64>,
+}
+
+/// The data segments of the module.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct Data {
+    /// The sum of all segment sizes.
+    pub bytes: u64,
+    /// The [`LARGEST_DATA_SEGMENTS`] largest segments, biggest first.
+    pub largest: Vec<DataSegment>,
+    /// Every segment in order. Not serialized.
+    #[serde(skip)]
+    pub segments: Vec<DataSegment>,
+}
+
 /// The size of one section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Section {
@@ -780,6 +918,10 @@ struct Reader {
     types: Vec<Option<FuncSignature>>,
     /// The type index of every function, imported first.
     functions: Vec<u32>,
+    bodies: Vec<FunctionBody>,
+    segments: Vec<DataSegment>,
+    function_names: BTreeMap<u32, String>,
+    function_exports: BTreeMap<u32, Vec<String>>,
     uses: BTreeMap<Feature, FeatureUse>,
     unclassified: BTreeMap<String, u64>,
     unreadable: Vec<String>,
@@ -864,6 +1006,13 @@ impl Reader {
                 }
             }
             Payload::CodeSectionEntry(body) => {
+                let range = body.range();
+                self.bodies.push(FunctionBody {
+                    index: self.inventory.counts.imported_functions + index_of(self.bodies.len()),
+                    size: range.end - range.start,
+                    name: None,
+                    exported_as: Vec::new(),
+                });
                 for operator in body.get_operators_reader()? {
                     self.operator(&operator?, false);
                 }
@@ -900,6 +1049,12 @@ impl Reader {
 
     fn data(&mut self, data: wasmparser::Data<'_>) -> Parsed<()> {
         self.inventory.counts.data_segments += 1;
+        let mut segment = DataSegment {
+            index: index_of(self.segments.len()),
+            size: data.data.len() as u64,
+            memory: None,
+            offset: None,
+        };
         match data.kind {
             DataKind::Passive => self.declare(Feature::BulkMemory),
             DataKind::Active {
@@ -910,8 +1065,11 @@ impl Reader {
                     self.declare(Feature::MultiMemory);
                 }
                 self.const_expr(&offset_expr)?;
+                segment.memory = Some(memory_index);
+                segment.offset = constant_offset(&offset_expr);
             }
         }
+        self.segments.push(segment);
         Ok(())
     }
 
@@ -1102,6 +1260,10 @@ impl Reader {
         let name = name.to_string();
         let ty = match kind {
             ExternalKind::Func | ExternalKind::FuncExact => {
+                self.function_exports
+                    .entry(index)
+                    .or_default()
+                    .push(name.clone());
                 ExternType::Function(self.signature(self.functions[slot]))
             }
             ExternalKind::Table => {
@@ -1245,7 +1407,10 @@ impl Reader {
                 Name::Module { name, .. } => module = Some(name.to_string()),
                 Name::Function(map) => {
                     for naming in map {
-                        naming?;
+                        let naming = naming?;
+                        self.function_names
+                            .entry(naming.index)
+                            .or_insert_with(|| naming.name.to_string());
                         functions += 1;
                     }
                 }
@@ -1308,6 +1473,32 @@ impl Reader {
 
     fn finish(mut self) -> Inventory {
         let mut inventory = std::mem::take(&mut self.inventory);
+        let mut bodies = self.bodies;
+        for body in &mut bodies {
+            body.name = self.function_names.remove(&body.index);
+            if let Some(mut names) = self.function_exports.remove(&body.index) {
+                names.sort();
+                body.exported_as = names;
+            }
+        }
+        let mut largest = bodies.clone();
+        largest.sort_by_key(|body| (std::cmp::Reverse(body.size), body.index));
+        largest.truncate(LARGEST_FUNCTIONS);
+        inventory.functions = Functions {
+            count: index_of(bodies.len()),
+            body_bytes: bodies.iter().map(|body| body.size).sum(),
+            largest,
+            bodies,
+        };
+        let mut largest = self.segments.clone();
+        largest.sort_by_key(|segment| (std::cmp::Reverse(segment.size), segment.index));
+        largest.truncate(LARGEST_DATA_SEGMENTS);
+        inventory.data = Data {
+            bytes: self.segments.iter().map(|segment| segment.size).sum(),
+            largest,
+            segments: self.segments,
+        };
+        inventory.composition = Composition::of(&inventory.sections);
         inventory.features = self.uses.into_values().collect();
         inventory.coverage = Coverage {
             complete: self.unclassified.is_empty() && self.unreadable.is_empty(),
@@ -1317,6 +1508,17 @@ impl Reader {
         };
         inventory
     }
+}
+
+/// The offset of an active data segment if it is a single constant.
+fn constant_offset(expr: &ConstExpr<'_>) -> Option<u64> {
+    let mut reader = expr.get_operators_reader().into_iter();
+    let offset = match reader.next()?.ok()? {
+        Operator::I32Const { value } => u64::from(value as u32),
+        Operator::I64Const { value } => value as u64,
+        _ => return None,
+    };
+    matches!(reader.next()?.ok()?, Operator::End).then_some(offset)
 }
 
 fn index_of(position: usize) -> u32 {
@@ -1376,6 +1578,70 @@ mod tests {
         inventory
             .feature(feature)
             .map_or((0, 0), |used| (used.declarations, used.instructions))
+    }
+
+    #[test]
+    fn function_bodies_carry_names_exports_and_local_ids_and_reconcile_with_the_code_section() {
+        let inventory = inventory(
+            r#"(module
+                (import "env" "log" (func))
+                (func $helper nop nop nop)
+                (func (export "run") nop)
+                (func nop nop))"#,
+        );
+        let bodies = &inventory.functions.bodies;
+        let ids: Vec<_> = bodies.iter().map(FunctionBody::local_id).collect();
+        assert_eq!(ids, ["func[1]", "func[2]", "func[3]"]);
+        assert_eq!(bodies[0].name.as_deref(), Some("helper"));
+        assert_eq!(bodies[1].exported_as, ["run"]);
+        assert_eq!(bodies[2].name, None);
+        assert!(bodies[0].size > bodies[1].size);
+        assert_eq!(inventory.functions.largest[0].index, 1);
+        // The code section is the bodies plus one size prefix each and the count.
+        assert_eq!(
+            inventory.composition.code,
+            inventory.functions.body_bytes + 3 + 1
+        );
+    }
+
+    #[test]
+    fn a_stripped_module_has_no_names_and_composition_adds_up_to_the_file() {
+        let bytes = wat::parse_str(
+            r#"(module (memory 1) (func nop)
+                (data (i32.const 8) "abcd") (data "passive")
+                (@custom ".debug_line" "xx") (@custom "other" "yyy"))"#,
+        )
+        .unwrap();
+        let inventory = Inventory::from_bytes(&bytes).unwrap();
+        assert_eq!(inventory.composition.total(), bytes.len() as u64);
+        assert_eq!(inventory.functions.bodies[0].name, None);
+        assert!(inventory.composition.debug > 0 && inventory.composition.custom > 0);
+        assert_eq!(inventory.composition.names, 0);
+    }
+
+    #[test]
+    fn data_segments_are_sized_and_located_but_never_read_out() {
+        let inventory = inventory(
+            r#"(module (memory 1)
+                (data (i32.const 4096) "abcdefgh")
+                (data (i32.const 0) "ab")
+                (data "passive!!!"))"#,
+        );
+        let largest = &inventory.data.largest;
+        assert_eq!(inventory.data.bytes, 20);
+        assert_eq!(
+            (largest[0].size, largest[0].memory, largest[0].offset),
+            (10, None, None)
+        );
+        assert_eq!(
+            (largest[1].size, largest[1].memory, largest[1].offset),
+            (8, Some(0), Some(4096))
+        );
+        assert!(
+            !serde_json::to_string(&inventory)
+                .unwrap()
+                .contains("abcdefgh")
+        );
     }
 
     #[test]

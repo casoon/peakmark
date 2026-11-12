@@ -41,6 +41,8 @@ change the configuration, the baseline format or the output.
   [Policy](https://casoon.github.io/peakmark/docs/concepts/inventory/#policy).
 - **Library:** `peakmark::snapshot` and `peakmark::policy` hold the stored inventory, its diff and
   the policy evaluation.
+- **Library:** `Inventory::functions` and `Inventory::data` hold every function body and data
+  segment with raw sizes for later parts.
 
 ### Changed
 
