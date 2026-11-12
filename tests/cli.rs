@@ -983,3 +983,38 @@ export default () => new Promise((resolve) => {
         serde_json::json!([{ "kind": "workers", "count": 2 }])
     );
 }
+
+#[test]
+fn details_list_the_inventory_without_running_a_scenario() {
+    let project = Project::new("inventory-details", SIZE_ONLY);
+
+    let run = project.run(&["check", "--details"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "Inventory: fixture");
+    assert_contains(&run.stdout, "export grow (index 0): func (i32) -> i32");
+    assert_contains(
+        &run.stdout,
+        "memory 0 (exported as memory): min 1 page (64.0 KiB), no maximum",
+    );
+    assert_contains(&run.stdout, "none found");
+    assert_contains(&run.stdout, "no name section");
+    assert_contains(&run.stdout, "not detectable:");
+}
+
+#[test]
+fn json_carries_a_versioned_inventory() {
+    let project = Project::new("inventory-json", SIZE_ONLY);
+
+    let run = project.run(&["check", "--json"]);
+
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let inventory = &result["modules"][0]["inventory"];
+    assert_eq!(inventory["schema_version"], 1);
+    assert_eq!(inventory["artifact"]["kind"], "core_module");
+    assert_eq!(inventory["exports"][0]["name"], "memory");
+    assert_eq!(inventory["exports"][1]["type"]["params"][0], "i32");
+    assert_eq!(inventory["memories"][0]["type"]["page_size"], 65_536);
+    assert_eq!(inventory["names"]["status"], "absent");
+    assert_eq!(inventory["coverage"]["complete"], true);
+}

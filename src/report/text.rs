@@ -1,6 +1,12 @@
-use runemark::{Finding, FindingGroup, Location, Metric as ReportMetric, NextStep, Report, Tone};
+use runemark::{
+    DetailLevel, Finding, FindingGroup, Location, Metric as ReportMetric, NextStep, Report, Tone,
+};
 
 use crate::check::{Change, Issue, Level, ModuleResult, Reason, verdict};
+use crate::inventory::{
+    CustomKind, ExternType, FeatureUse, ImportName, Inventory, MemoryType, Names, SectionKind,
+    TableType, TargetFeatureMode,
+};
 use crate::runner::{ScenarioResult, Unobserved};
 use crate::units::format_binary;
 
@@ -56,21 +62,11 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
         ));
 
     if details {
-        let mut measured = FindingGroup::new("Measured");
-        for result in results {
-            measured = measured.add_finding(Finding::new(
-                Tone::Info,
-                format!(
-                    "{}: {}",
-                    result.module.name,
-                    result.measured.values.summary()
-                ),
-            ));
-            for scenario in &result.measured.scenarios {
-                measured = measured.add_finding(Finding::new(Tone::Info, trace(scenario)));
-            }
+        // The inventory is long; without the detailed level it is cut to three lines.
+        report = report.with_detail_level(DetailLevel::Detailed);
+        for group in detail_groups(results) {
+            report = report.add_group(group);
         }
-        report = report.add_group(measured);
     }
 
     for result in results {
@@ -114,6 +110,321 @@ pub fn report(results: &[ModuleResult], details: bool) -> Report {
         );
     }
     report
+}
+
+/// The `--details` groups: the measured values, then the inventory per module.
+fn detail_groups(results: &[ModuleResult]) -> Vec<FindingGroup> {
+    let mut measured = FindingGroup::new("Measured");
+    for result in results {
+        measured = measured.add_finding(Finding::new(
+            Tone::Info,
+            format!(
+                "{}: {}",
+                result.module.name,
+                result.measured.values.summary()
+            ),
+        ));
+        for scenario in &result.measured.scenarios {
+            measured = measured.add_finding(Finding::new(Tone::Info, trace(scenario)));
+        }
+    }
+    let mut groups = vec![measured];
+    for result in results {
+        let mut group = FindingGroup::new(format!("Inventory: {}", result.module.name));
+        for line in inventory_lines(&result.measured.inventory) {
+            group = group.add_finding(Finding::new(Tone::Info, line));
+        }
+        groups.push(group);
+    }
+    groups
+}
+
+/// What the static inventory says, one line each. Features are labelled as
+/// derived, and what cannot be detected is stated every time.
+fn inventory_lines(inventory: &Inventory) -> Vec<String> {
+    let counts = &inventory.counts;
+    let functions = counts.imported_functions + counts.defined_functions;
+    let mut lines = vec![format!(
+        "core module, binary version {}: {} types, {functions} functions ({} imported), {} globals, {} imports, {} exports, {} data segments, {} element segments",
+        inventory.artifact.version,
+        counts.types,
+        counts.imported_functions,
+        inventory.globals.len(),
+        counts.imports,
+        counts.exports,
+        counts.data_segments,
+        counts.element_segments,
+    )];
+    for import in &inventory.imports {
+        lines.push(format!(
+            "import {}.{}: {}",
+            import.module,
+            import.name,
+            extern_type(&import.ty)
+        ));
+    }
+    for export in &inventory.exports {
+        lines.push(format!(
+            "export {} (index {}): {}",
+            export.name,
+            export.index,
+            extern_type(&export.ty)
+        ));
+    }
+    for memory in &inventory.memories {
+        lines.push(format!(
+            "memory {}{}: {}",
+            memory.index,
+            origin(memory.imported_from.as_ref(), &memory.exported_as),
+            memory_type(&memory.ty)
+        ));
+    }
+    for table in &inventory.tables {
+        lines.push(format!(
+            "table {}{}: {}",
+            table.index,
+            origin(table.imported_from.as_ref(), &table.exported_as),
+            table_type(&table.ty)
+        ));
+    }
+    for tag in &inventory.tags {
+        lines.push(format!(
+            "tag {}{}: {}",
+            tag.index,
+            origin(tag.imported_from.as_ref(), &tag.exported_as),
+            tag.ty
+        ));
+    }
+    lines.push(feature_line(&inventory.features));
+    let coverage = &inventory.coverage;
+    let mut gaps = Vec::new();
+    for (proposal, count) in &coverage.unclassified_instructions {
+        gaps.push(format!(
+            "{count} instructions of proposal {proposal} are not classified"
+        ));
+    }
+    for section in &coverage.unreadable_custom_sections {
+        gaps.push(format!("custom section {section} could not be read"));
+    }
+    if !gaps.is_empty() {
+        lines.push(format!("coverage reduced: {}", gaps.join("; ")));
+    }
+    let limits: Vec<_> = coverage
+        .not_detectable
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    lines.push(format!("not detectable: {}", limits.join("; ")));
+    lines.push(sections_line(inventory));
+    lines.extend(metadata_lines(inventory));
+    lines
+}
+
+/// Names, producers and target features: what the toolchain left in the file.
+fn metadata_lines(inventory: &Inventory) -> Vec<String> {
+    let counts = &inventory.counts;
+    let functions = counts.imported_functions + counts.defined_functions;
+    let mut lines = Vec::new();
+    lines.push(match &inventory.names {
+        Names::Absent => "names: no name section, functions and locals are unnamed".to_string(),
+        Names::Unreadable => "names: the name section could not be read".to_string(),
+        Names::Present {
+            module,
+            functions: named,
+            functions_with_local_names,
+        } => format!(
+            "names: {named} of {functions} functions named, {functions_with_local_names} with local names{}",
+            module
+                .as_ref()
+                .map_or_else(String::new, |name| format!(", module {name}")),
+        ),
+    });
+    if !inventory.producers.is_empty() {
+        let producers: Vec<_> = inventory
+            .producers
+            .iter()
+            .map(|producer| format!("{} {} {}", producer.field, producer.name, producer.version))
+            .collect();
+        lines.push(format!("producers: {}", producers.join(", ")));
+    }
+    if !inventory.target_features.is_empty() {
+        let features: Vec<_> = inventory
+            .target_features
+            .iter()
+            .map(|feature| {
+                let mark = match feature.mode {
+                    TargetFeatureMode::Used => '+',
+                    TargetFeatureMode::Disallowed => '-',
+                    TargetFeatureMode::Required => '=',
+                };
+                format!("{mark}{}", feature.name)
+            })
+            .collect();
+        lines.push(format!(
+            "target_features (the toolchain's claim, not used for the features above): {}",
+            features.join(" ")
+        ));
+    }
+    lines
+}
+
+fn extern_type(ty: &ExternType) -> String {
+    match ty {
+        ExternType::Function(signature) => format!("func {signature}"),
+        ExternType::Table(table) => format!("table {}", table_type(table)),
+        ExternType::Memory(memory) => format!("memory {}", memory_type(memory)),
+        ExternType::Global(global) => format!(
+            "global {}{}",
+            if global.mutable { "mut " } else { "" },
+            global.value
+        ),
+        ExternType::Tag(signature) => format!("tag {signature}"),
+    }
+}
+
+fn origin(imported_from: Option<&ImportName>, exported_as: &[String]) -> String {
+    let mut parts = Vec::new();
+    if let Some(import) = imported_from {
+        parts.push(format!("imported from {}.{}", import.module, import.name));
+    }
+    if !exported_as.is_empty() {
+        parts.push(format!("exported as {}", exported_as.join(", ")));
+    }
+    if parts.is_empty() {
+        " (internal)".to_string()
+    } else {
+        format!(" ({})", parts.join("; "))
+    }
+}
+
+fn memory_type(memory: &MemoryType) -> String {
+    let pages = |count: u64| format!("{count} page{}", if count == 1 { "" } else { "s" });
+    let mut parts = vec![format!(
+        "min {} ({})",
+        pages(memory.minimum),
+        format_wide(memory.minimum_bytes())
+    )];
+    parts.push(match (memory.maximum, memory.maximum_bytes()) {
+        (Some(maximum), Some(bytes)) => {
+            format!("max {} ({})", pages(maximum), format_wide(bytes))
+        }
+        _ => "no maximum".to_string(),
+    });
+    if memory.shared {
+        parts.push("shared".to_string());
+    }
+    if memory.memory64 {
+        parts.push("64-bit".to_string());
+    }
+    parts.push(format!("page size {}", format_binary(memory.page_size)));
+    parts.join(", ")
+}
+
+fn table_type(table: &TableType) -> String {
+    let mut parts = vec![format!("{} min {}", table.element, table.minimum)];
+    parts.push(table.maximum.map_or_else(
+        || "no maximum".to_string(),
+        |maximum| format!("max {maximum}"),
+    ));
+    if table.table64 {
+        parts.push("64-bit".to_string());
+    }
+    if table.shared {
+        parts.push("shared".to_string());
+    }
+    parts.join(", ")
+}
+
+fn format_wide(bytes: u128) -> String {
+    u64::try_from(bytes).map_or_else(|_| "more than 16 EiB".to_string(), format_binary)
+}
+
+fn feature_line(features: &[FeatureUse]) -> String {
+    if features.is_empty() {
+        return "features (derived from declarations and instructions): none found".to_string();
+    }
+    let plural =
+        |count: u64, noun: &str| format!("{count} {noun}{}", if count == 1 { "" } else { "s" });
+    let listed: Vec<_> = features
+        .iter()
+        .map(|used| {
+            let mut evidence = Vec::new();
+            if used.declarations > 0 {
+                evidence.push(plural(used.declarations, "declaration"));
+            }
+            if used.instructions > 0 {
+                evidence.push(plural(used.instructions, "instruction"));
+            }
+            format!("{} ({})", used.feature.label(), evidence.join(", "))
+        })
+        .collect();
+    format!(
+        "features (derived from declarations and instructions): {}",
+        listed.join(", ")
+    )
+}
+
+/// Section bytes by kind, custom sections by name, and the preamble and
+/// section headers that no payload accounts for.
+fn sections_line(inventory: &Inventory) -> String {
+    let mut by_kind: Vec<(SectionKind, u64)> = Vec::new();
+    for section in &inventory.sections {
+        if section.kind == SectionKind::Custom {
+            continue;
+        }
+        match by_kind.iter_mut().find(|(kind, _)| *kind == section.kind) {
+            Some((_, bytes)) => *bytes += section.payload,
+            None => by_kind.push((section.kind, section.payload)),
+        }
+    }
+    let framing = crate::inventory::PREAMBLE_BYTES
+        + inventory
+            .sections
+            .iter()
+            .map(|section| section.header)
+            .sum::<u64>();
+    let mut parts: Vec<String> = by_kind
+        .iter()
+        .map(|(kind, bytes)| format!("{} {}", section_name(*kind), format_binary(*bytes)))
+        .collect();
+    for custom in &inventory.custom_sections {
+        let kind = match custom.kind {
+            CustomKind::Names => "names",
+            CustomKind::Debug => "debug",
+            CustomKind::Producers => "producers",
+            CustomKind::TargetFeatures => "target features",
+            CustomKind::Other => "other",
+        };
+        parts.push(format!(
+            "custom {} ({kind}) {}",
+            custom.name,
+            format_binary(custom.bytes)
+        ));
+    }
+    parts.push(format!(
+        "preamble and section headers {}",
+        format_binary(framing)
+    ));
+    format!("sections: {}", parts.join(", "))
+}
+
+fn section_name(kind: SectionKind) -> &'static str {
+    match kind {
+        SectionKind::Custom => "custom",
+        SectionKind::Type => "type",
+        SectionKind::Import => "import",
+        SectionKind::Function => "function",
+        SectionKind::Table => "table",
+        SectionKind::Memory => "memory",
+        SectionKind::Global => "global",
+        SectionKind::Export => "export",
+        SectionKind::Start => "start",
+        SectionKind::Element => "element",
+        SectionKind::Code => "code",
+        SectionKind::Data => "data",
+        SectionKind::DataCount => "data count",
+        SectionKind::Tag => "tag",
+    }
 }
 
 /// One line per scenario: the capacity trace split into warm-up and later growth.
