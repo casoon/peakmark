@@ -49,6 +49,12 @@ change the configuration, the baseline format or the output.
   largest function bodies; the format stays version 2 and entries without them still read.
 - **Library:** `Inventory::functions` and `Inventory::data` hold every function body and data
   segment with raw sizes for later parts.
+- **Size:** `check --details` and `--json` show why the largest functions are in the module: a
+  path from an export or the start function and the direct callers. Indirect calls are marked, and
+  a function without a path is never called dead. Details:
+  [Why a function is in the module](https://casoon.github.io/peakmark/docs/concepts/inventory/#why-a-function-is-in-the-module).
+- **Library:** `peakmark::reach` (`Reach::from_bytes`, `Reach::explain`, `Reach::report`) is the
+  reusable reference graph behind it.
 
 ### Changed
 

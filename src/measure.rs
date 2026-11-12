@@ -9,6 +9,7 @@ use crate::digest::sha256;
 use crate::error::Error;
 use crate::inventory::Inventory;
 use crate::metric::{Metric, Values};
+use crate::reach::{Reach, ReachReport};
 use crate::runner::{ScenarioResult, run_scenario};
 use crate::wasm::{InspectError, Sections, inspect};
 
@@ -22,6 +23,9 @@ pub struct Measured {
     pub initial_memory: Option<u64>,
     /// The static inventory of the artifact: interface, features, sections.
     pub inventory: Inventory,
+    /// Why the largest function bodies are in the module: a path from a root
+    /// and their direct callers, from a conservative reference graph.
+    pub reach: ReachReport,
     /// One result per configured scenario.
     pub scenarios: Vec<ScenarioResult>,
     /// SHA-256 of the artifact. It changes with every build and identifies
@@ -55,10 +59,30 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         source,
     })?;
     let inspection = inspect(&bytes).map_err(|error| match error {
-        InspectError::Invalid(source) => Error::InvalidModule { path, source },
-        InspectError::UnsupportedFeature(source) => Error::UnsupportedFeature { path, source },
-        InspectError::Component => Error::UnsupportedComponent { path },
+        InspectError::Invalid(source) => Error::InvalidModule {
+            path: path.clone(),
+            source,
+        },
+        InspectError::UnsupportedFeature(source) => Error::UnsupportedFeature {
+            path: path.clone(),
+            source,
+        },
+        InspectError::Component => Error::UnsupportedComponent { path: path.clone() },
     })?;
+
+    let reach = Reach::from_bytes(&bytes)
+        .map_err(|error| Error::InvalidModule {
+            path,
+            source: error.into_inner(),
+        })?
+        .report(
+            inspection
+                .inventory
+                .functions
+                .largest
+                .iter()
+                .map(|body| body.index),
+        );
 
     let mut scenarios = Vec::new();
     for scenario in &module.scenarios {
@@ -82,6 +106,7 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         sections: inspection.sections,
         initial_memory: inspection.initial_memory,
         inventory: inspection.inventory,
+        reach,
         scenarios,
         artifact_sha256: sha256(&bytes),
     })

@@ -30,6 +30,7 @@ recursively.
 | Composition | `composition` | the bytes of the file by purpose, see [Where the bytes are](#where-the-bytes-are) |
 | Functions | `functions` | `count`, `body_bytes` and the `largest` bodies with their raw size, name and exports |
 | Data | `data` | `bytes` and the `largest` data segments by size and location |
+| Reach | `reach` | why the largest functions are in the module, see [Why a function is in the module](#why-a-function-is-in-the-module) |
 | Names | `names` | `absent`, `present` (module name, named functions) or `unreadable` |
 | Metadata | `producers`, `target_features` | what the toolchain wrote |
 | Coverage | `coverage` | what the inventory could not decide |
@@ -206,8 +207,78 @@ it stays small however large the module is.
 If the module has more than 20 functions, a key only on one side may mean the function rose into
 or fell out of the list instead of being new or gone; then it is `entered_largest` or
 `left_largest`, and its size is not counted as attributed. Sizes are raw body bytes, not gzip or
-Brotli savings. Matching the paths that retain a function, and mapping bytes to source, are
-separate, later work.
+Brotli savings. Mapping bytes to source is separate, later work. Why a large function is in the module is
+answered by [the reference graph](#why-a-function-is-in-the-module).
+
+## Why a function is in the module
+
+`check --details` explains the largest function bodies and `--json` carries the same under
+`reach`: a short representative path from an export or the start function to the function, and its
+direct callers. It comes from a reference graph of the core module, read from the bytes like the
+rest of the inventory. It is an explanation of how a function is referred to, not a statement of
+what removing it would save, and there is no separate command for it.
+
+```text
+why dispatched (22 B) is in the module: reached only by indirect dispatch, which assumes every table entry is callable: export "run": entry -indirect-> table -element-> dispatched; 1 direct caller: table
+why helper (14 B) is in the module: reached from export "run": entry -> helper; 1 direct caller: entry
+```
+
+### The graph
+
+Nodes are the functions plus one pseudo node, the table, which stands for every function reference
+that does not sit in code: the entries of element segments and the `ref.func` of global and table
+initializers.
+
+| Edge | Meaning |
+|---|---|
+| `call` | `call` or `return_call` to a function |
+| `reference` | `ref.func` in a function body |
+| `dispatch` | the function contains `call_indirect`, `call_ref`, a `table.*` instruction or a `global.get` of a reference-typed global, so it may use any function reference |
+| `elements` | the table to every function in an element segment or an initializer |
+
+The roots are the exported functions and the start function. The table is a root as well if the
+module imports or exports a table, or exports a global that holds a reference. Data segments add no
+edge: they hold bytes, and a function pointer in linear memory is a table index that only
+`call_indirect` can use. `--json` lists these assumptions under `reach.assumptions`.
+
+### What an answer says
+
+| `reachability` | Meaning |
+|---|---|
+| `direct` | a path of calls and references exists from a root; the shortest is shown, ties go to the first export, then the start function, then the lower function index |
+| `via_table` | every path goes through the table: the function is an element or initializer entry, and a reachable function can dispatch. The target of an indirect call is not known from the bytes, so every entry is assumed callable |
+| `no_static_root` | the graph has no root for it |
+| `unknown` | there is no path and the module contains operators the graph does not model (stack switching); `reach.coverage` says how many |
+
+`no_static_root` is not "dead code" and not a saving. peakmark never reports a function as unused
+or removable, and never gives a retained size: shared dependencies and a table that holds most of the
+module would turn such a number into a claim it cannot support. Unknown targets are marked
+`via_table` or `unknown`, never left out. A path never repeats a function, so recursion shows as a
+caller (a function that calls itself is its own direct caller) and not as a loop.
+
+`callers` lists the direct callers, at most five, with their total `count`; a caller is a function
+(by `call` or `reference`) or the table. A function is shown by its name, its export or its index
+in this file (`func[12]`); the index means nothing in another build, so compare paths by name.
+
+### What to expect
+
+Modules built with wasm-bindgen dispatch a lot through the table. In two such modules (440 kB and
+1.4 MB, 1,033 and 1,998 functions), 15 and 14 of the 20 largest functions were reachable only
+through the table, and in the second the table is exported, so the path is just the table and the
+entry. For those the answer is the hint, not a long path; the direct callers and the
+direct paths of the rest (for example `export "wasmchart_redo" -> func[89]`) are what goes beyond the
+size ranking.
+
+### Cost and limits
+
+The graph is one pass over the code section plus two breadth-first searches. On a synthetic module
+of 1.7 MB with 20 000 functions it takes about 7 ms in a release build. It runs for every check;
+the library API does not need the rest of the check: `peakmark::reach::Reach::from_bytes` and
+`Reach::explain` are documented with `cargo doc`.
+
+Not modelled: function pointers a host stores outside the module, what an imported function does
+with a reference it is given beyond the `ref.func` edge, and stack switching. The path of a function
+is not stored in the baseline.
 
 ### What a host-interface change means
 

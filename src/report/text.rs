@@ -6,9 +6,10 @@ use runemark::{
 
 use crate::check::{Change, Issue, Level, ModuleResult, Reason, verdict};
 use crate::inventory::{
-    CustomKind, ExternType, FeatureUse, ImportName, Inventory, MemoryType, Names, SectionKind,
-    TableType, TargetFeatureMode,
+    CustomKind, ExternType, FeatureUse, FunctionBody, ImportName, Inventory, MemoryType, Names,
+    SectionKind, TableType, TargetFeatureMode,
 };
+use crate::reach::{Edge, Hop, Node, ReachReport, Reachability};
 use crate::runner::{ScenarioResult, Unobserved};
 use crate::snapshot::{
     Confidence, Drift, FunctionChange, FunctionChangeKind, FunctionDrift, Part, SectionDrift,
@@ -171,7 +172,13 @@ fn detail_groups(results: &[ModuleResult]) -> Vec<FindingGroup> {
     let mut groups = vec![measured];
     for result in results {
         let mut group = FindingGroup::new(format!("Inventory: {}", result.module.name));
-        for line in inventory_lines(&result.measured.inventory) {
+        let lines = inventory_lines(&result.measured.inventory)
+            .into_iter()
+            .chain(reach_lines(
+                &result.measured.inventory,
+                &result.measured.reach,
+            ));
+        for line in lines {
             group = group.add_finding(Finding::new(Tone::Info, line));
         }
         groups.push(group);
@@ -436,14 +443,7 @@ fn size_lines(inventory: &Inventory) -> Vec<String> {
             .largest
             .iter()
             .take(10)
-            .map(|body| {
-                let name = body
-                    .name
-                    .clone()
-                    .or_else(|| body.exported_as.first().map(|e| format!("export \"{e}\"")))
-                    .unwrap_or_else(|| body.local_id());
-                format!("{name} {}", format_decimal(body.size))
-            })
+            .map(|body| format!("{} {}", body.label(), format_decimal(body.size)))
             .collect();
         lines.push(format!(
             "largest function bodies (raw bytes, not compressed savings): {}",
@@ -470,6 +470,121 @@ fn size_lines(inventory: &Inventory) -> Vec<String> {
         ));
     }
     lines
+}
+
+/// How many of the largest functions get a line about why they are in the module.
+const EXPLAINED: usize = 5;
+
+/// The longest path printed in full; a longer one keeps its start and end.
+const SHOWN_HOPS: usize = 8;
+
+/// Why the largest functions are in the module, from the reference graph:
+/// a representative path from a root and the direct callers. A function
+/// without a path is "no static root", never unused.
+fn reach_lines(inventory: &Inventory, reach: &ReachReport) -> Vec<String> {
+    let label = |function: u32| {
+        inventory
+            .functions
+            .body(function)
+            .map_or_else(|| format!("func[{function}]"), FunctionBody::label)
+    };
+    let node = |node: Node| match node {
+        Node::Function(function) => label(function),
+        Node::Table => "table".to_string(),
+    };
+    let mut lines = Vec::new();
+    for explanation in reach.explanations.iter().take(EXPLAINED) {
+        let name = label(explanation.function);
+        let size = inventory
+            .functions
+            .body(explanation.function)
+            .map_or_else(String::new, |body| {
+                format!(" ({})", format_decimal(body.size))
+            });
+        let callers = &explanation.callers;
+        let called = if callers.count == 0 {
+            "no direct callers".to_string()
+        } else {
+            let listed: Vec<_> = callers.listed.iter().map(|c| node(c.node)).collect();
+            let more = callers.count - listed.len();
+            format!(
+                "{} direct caller{}: {}{}",
+                callers.count,
+                if callers.count == 1 { "" } else { "s" },
+                listed.join(", "),
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
+            )
+        };
+        let reached = match explanation.reachability {
+            Reachability::Direct => format!("reached from {}", path_text(&explanation.path, &node)),
+            Reachability::ViaTable
+                if matches!(
+                    explanation.path.first().map(|hop| &hop.edge),
+                    Some(Edge::Host)
+                ) =>
+            {
+                format!(
+                    "reached only through the table, which the module imports or exports, so the host may call every entry: {}",
+                    path_text(&explanation.path, &node)
+                )
+            }
+            Reachability::ViaTable => format!(
+                "reached only by indirect dispatch, which assumes every table entry is callable: {}",
+                path_text(&explanation.path, &node)
+            ),
+            Reachability::NoStaticRoot => {
+                "no static root in the reference graph (not a statement that it is unused)"
+                    .to_string()
+            }
+            Reachability::Unknown => {
+                "unknown: the module uses operators the reference graph does not model".to_string()
+            }
+        };
+        lines.push(format!(
+            "why {name}{size} is in the module: {reached}; {called}"
+        ));
+    }
+    lines
+}
+
+/// `export "run": a -> b -ref.func-> c`, with the middle left out if long.
+fn path_text(path: &[Hop], node: &dyn Fn(Node) -> String) -> String {
+    let Some(first) = path.first() else {
+        return String::new();
+    };
+    let root = match &first.edge {
+        Edge::Export(name) => format!("export \"{name}\""),
+        Edge::Start => "the start function".to_string(),
+        _ => "table".to_string(),
+    };
+    let step = |hop: &Hop| {
+        let arrow = match hop.edge {
+            Edge::Reference => " -ref.func-> ",
+            Edge::Dispatch => " -indirect-> ",
+            Edge::Elements => " -element-> ",
+            _ => " -> ",
+        };
+        format!("{arrow}{}", node(hop.node))
+    };
+    let start = node(first.node);
+    let mut text = if start == root {
+        start
+    } else {
+        format!("{root}: {start}")
+    };
+    let rest = &path[1..];
+    if rest.len() < SHOWN_HOPS {
+        text.extend(rest.iter().map(step));
+    } else {
+        text.extend(rest[..3].iter().map(step));
+        let _ = write!(text, " -> ... {} more ...", rest.len() - 6);
+        text.extend(rest[rest.len() - 3..].iter().map(step));
+    }
+    text
 }
 
 /// Section bytes by kind, custom sections by name, and the preamble and

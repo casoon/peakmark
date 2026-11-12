@@ -580,6 +580,7 @@ mod tests {
             sections: Sections::default(),
             initial_memory: None,
             inventory: crate::inventory::Inventory::default(),
+            reach: crate::reach::ReachReport::default(),
             scenarios,
             artifact_sha256: "artifact".to_string(),
         }

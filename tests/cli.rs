@@ -1448,3 +1448,91 @@ fn an_entry_without_sizes_notes_it_and_attributes_nothing() {
     assert!(with_rule(&all, "baseline/size-functions").is_none());
     assert_eq!(run.code, 0, "{}", run.stderr);
 }
+
+// Why the largest functions are in the module: the reference graph, as a detail.
+
+const REACH_MODULE: &str = r#"(module
+    (type $t (func))
+    (table 1 funcref)
+    (elem (i32.const 0) $dispatched)
+    (func $entry (export "run") (call_indirect (type $t) (i32.const 0)) call $helper)
+    (func $helper nop nop nop nop nop nop nop nop nop nop nop nop)
+    (func $dispatched nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop)
+    (func $unused nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop))"#;
+
+fn reach_project(name: &str, wat: &str) -> Project {
+    let project = Project::new(name, SIZE_ONLY);
+    project.write("fixture.wasm", wat::parse_str(wat).unwrap());
+    project
+}
+
+#[test]
+fn details_explain_the_largest_functions_without_calling_anything_unused() {
+    let project = reach_project("reach-details", REACH_MODULE);
+
+    let run = project.run(&["check", "--details"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "why unused (");
+    assert_contains(
+        &run.stdout,
+        "no static root in the reference graph (not a statement that it is unused)",
+    );
+    assert_contains(
+        &run.stdout,
+        "reached only by indirect dispatch, which assumes every table entry is callable: export \"run\": entry -indirect-> table -element-> dispatched",
+    );
+    assert_contains(&run.stdout, "reached from export \"run\": entry -> helper");
+    assert!(!run.stdout.contains("dead code"), "{}", run.stdout);
+}
+
+#[test]
+fn json_names_the_path_the_callers_and_the_assumptions() {
+    let project = reach_project("reach-json", REACH_MODULE);
+
+    let run = project.run(&["check", "--json"]);
+
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let reach = &result["modules"][0]["reach"];
+    assert_eq!(reach["coverage"]["complete"], true);
+    assert!(reach["assumptions"].as_array().unwrap().len() >= 4);
+    let function = |label: &str| {
+        reach["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["function"]["label"] == label)
+            .unwrap_or_else(|| panic!("{label} not in {reach}"))
+    };
+    let helper = function("helper");
+    assert_eq!(helper["reachability"], "direct");
+    assert_eq!(helper["path"][0]["edge"]["export"], "run");
+    assert_eq!(helper["path"][0]["node"]["function"]["label"], "entry");
+    assert_eq!(helper["path"][1]["edge"], "call");
+    assert_eq!(helper["callers"]["count"], 1);
+    let dispatched = function("dispatched");
+    assert_eq!(dispatched["reachability"], "via_table");
+    assert_eq!(dispatched["path"][1]["node"], "table");
+    assert_eq!(function("unused")["reachability"], "no_static_root");
+    assert_eq!(function("unused")["path"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn a_stripped_module_is_explained_by_export_and_local_id_never_by_a_guessed_name() {
+    let project = reach_project(
+        "reach-stripped",
+        r#"(module
+            (func (export "run") call 1)
+            (func call 2 nop nop nop nop nop nop nop nop)
+            (func nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop nop))"#,
+    );
+
+    let run = project.run(&["check", "--details"]);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "why func[2] (");
+    assert_contains(
+        &run.stdout,
+        "reached from export \"run\" -> func[1] -> func[2]",
+    );
+}

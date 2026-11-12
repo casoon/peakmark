@@ -2,8 +2,10 @@ use runemark::Verdict;
 use serde_json::json as object;
 
 use crate::check::{Change, Level, ModuleResult, Reason, verdict};
+use crate::inventory::{FunctionBody, Inventory};
 use crate::metric::Values;
 use crate::policy::Violation;
+use crate::reach::{Node, ReachReport};
 use crate::snapshot::Drift;
 
 /// The machine-readable result of a check, the document `--json` prints.
@@ -46,6 +48,7 @@ pub fn json(results: &[ModuleResult]) -> serde_json::Value {
                 "initial_memory": result.measured.initial_memory,
                 "sections": result.measured.sections,
                 "inventory": result.measured.inventory,
+                "reach": reach(&result.measured.inventory, &result.measured.reach),
                 "scenarios": result.measured.scenarios,
                 "issues": issues,
                 "changes": result.changes.iter().map(change).collect::<Vec<_>>(),
@@ -54,6 +57,51 @@ pub fn json(results: &[ModuleResult]) -> serde_json::Value {
         })
         .collect();
     object!({ "verdict": verdict, "modules": modules })
+}
+
+/// Why the largest functions are in the module. Functions are given by index in
+/// this file, with their name and exports; the index means nothing in another build.
+fn reach(inventory: &Inventory, report: &ReachReport) -> serde_json::Value {
+    let function = |index: u32| {
+        let body = inventory.functions.body(index);
+        object!({
+            "index": index,
+            "label": body.map_or_else(|| format!("func[{index}]"), FunctionBody::label),
+            "size": body.map(|body| body.size),
+        })
+    };
+    let node = |node: Node| match node {
+        Node::Function(index) => object!({ "function": function(index) }),
+        Node::Table => object!("table"),
+    };
+    let explanations: Vec<_> = report
+        .explanations
+        .iter()
+        .map(|explanation| {
+            let path: Vec<_> = explanation
+                .path
+                .iter()
+                .map(|hop| object!({ "node": node(hop.node), "edge": hop.edge }))
+                .collect();
+            let listed: Vec<_> = explanation
+                .callers
+                .listed
+                .iter()
+                .map(|caller| object!({ "node": node(caller.node), "edge": caller.edge }))
+                .collect();
+            object!({
+                "function": function(explanation.function),
+                "reachability": explanation.reachability,
+                "path": path,
+                "callers": { "count": explanation.callers.count, "listed": listed },
+            })
+        })
+        .collect();
+    object!({
+        "assumptions": report.assumptions,
+        "coverage": report.coverage,
+        "functions": explanations,
+    })
 }
 
 fn change(change: &Change) -> serde_json::Value {

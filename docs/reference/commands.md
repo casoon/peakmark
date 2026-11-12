@@ -38,7 +38,7 @@ It refuses a missing reason, a module that is over its budget and a module that 
 | Option | Meaning |
 |---|---|
 | `--config <file>` | configuration file, `peakmark.toml` by default |
-| `--details` | `check`: also list the measured values and the [inventory](../../concepts/inventory/) of every module |
+| `--details` | `check`: also list the measured values and the [inventory](../../concepts/inventory/) of every module, including why its largest functions are in it |
 | `--json` | `check`: print JSON instead of the report |
 | `--all` | `accept`: every configured module |
 | `--reason <text>` | `accept`: why the baseline changes |
@@ -82,4 +82,7 @@ broken policy rules, each with `rule`, `level` (`error`), `message`, the `action
 `baseline/size-sections` lists the parts that differ and an `action`; the one of
 `baseline/size-functions` carries `confidence`, `status`, `changes`, the unmatched functions and
 `unaccounted`. `inventory` is the static inventory of the artifact, with its own
-`schema_version`; see [Inventory](../../concepts/inventory/).
+`schema_version`; see [Inventory](../../concepts/inventory/). `reach` explains the largest functions:
+its `assumptions`, its `coverage` and, per function, the `reachability`, a `path` from an export or
+the start function and the direct `callers`; see
+[Why a function is in the module](../../concepts/inventory/#why-a-function-is-in-the-module).

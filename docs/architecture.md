@@ -22,6 +22,7 @@ src/
 ├── inventory.rs   the static inventory: interface, memories, derived features, sections, composition, function bodies, data segments, metadata
 ├── snapshot.rs    the inventory as the baseline keeps it, and the diff of two: Snapshot, Drift, section and function drift
 ├── policy.rs      [module.policy]: required exports, allowed imports and features, Violation
+├── reach.rs       the conservative reference graph of a module: Reach, Explanation (path from a root, callers)
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
 ├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
@@ -43,8 +44,9 @@ tests/
 1. `cli::args` parses the arguments into a `Cli`.
 2. `config::load` reads `peakmark.toml`; `baseline::load` reads the baseline next to it.
 3. For each configured module, `measure::measure` reads the artifact, asks `wasm::inspect` for its
-   sections, declared memory and `Inventory`, `compress` for the gzip and brotli length, and `runner` for the
-   memory after each scenario. The result is a `Measured`.
+   sections, declared memory and `Inventory`, `reach` for the explanation of its largest functions,
+   `compress` for the gzip and brotli length, and `runner` for the memory after each scenario. The
+   result is a `Measured`.
 4. `check::evaluate` judges every value: over the budget is an error, past the baseline by more than
    the tolerance is a warning. Budgets judge the module-wide values; the baseline judges size per
    module and memory per scenario. Where the baseline and the measurement no longer line up
@@ -82,6 +84,12 @@ module values, per-scenario values, contract, inventory snapshot) and the reason
   never by index.
   Differences are warnings; only a `policy::Policy` that the project configured fails the check, and
   it is strict about what it cannot classify.
+- **`reach` explains, it does not judge.** It reads the module itself (no `Inventory` needed) and
+  answers by function index: a shortest path from an export or the start function, and the direct
+  callers. The table is a pseudo node, so an indirect call is marked and never resolved, a
+  function without a path is `no_static_root` (or `unknown`), and nothing in it is a size, a
+  saving or a verdict. `report` adds the names from `Inventory::functions`. Nothing of it is
+  stored in the baseline.
 - **Only `check` decides** what is an error and what is a warning. A policy `Violation` is an error
   and no baseline waives it; an inventory difference is a warning. `report` formats those decisions
   and does not make its own.
