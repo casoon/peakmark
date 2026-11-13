@@ -19,7 +19,6 @@ const COULD_NOT_RUN: u8 = 2;
 
 /// Runs peakmark with the arguments after the program name and returns the
 /// exit code.
-#[must_use]
 pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
     let cli = match parse(args) {
         Ok(Parsed::Run(cli)) => cli,

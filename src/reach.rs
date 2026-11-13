@@ -309,7 +309,7 @@ impl Reach {
         Some(Explanation {
             function,
             reachability,
-            path: tree.map(|tree| tree.path(slot)).unwrap_or_default(),
+            path: tree.map_or_default(|tree| tree.path(slot)),
             callers: Callers {
                 count: callers.len(),
                 listed: callers.iter().take(MAX_CALLERS).copied().collect(),
