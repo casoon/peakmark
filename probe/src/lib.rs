@@ -18,7 +18,7 @@
 //! `peakmark_probe_peak`, `peakmark_probe_allocations` and
 //! `peakmark_probe_frees`, each a function without parameters that returns an
 //! `i64`, and `peakmark_probe_version`, which returns the protocol version.
-//! `peakmark` reads them after instantiation and after every run of a scenario.
+//! `peakmark` reads them once, after the last run of a scenario.
 //!
 //! A `realloc` counts as one allocation and one free, and changes *live* by the
 //! difference between the new and the old size. A request that fails is not

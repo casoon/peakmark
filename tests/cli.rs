@@ -1931,7 +1931,7 @@ fn a_module_without_the_probe_is_not_observed_rather_than_zero() {
 
     let run = project.run(&["check", "--details"]);
     assert_eq!(run.code, 0, "{}", run.stderr);
-    assert_contains(&run.stdout, "allocator probe not observed");
+    assert!(!run.stdout.contains("allocator probe"), "{}", run.stdout);
 
     let run = project.run(&["check", "--json"]);
     let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();

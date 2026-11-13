@@ -58,7 +58,7 @@ render.mjs: allocator probe, requested live 90 B at the end, peak 1.2 MiB, 11994
 
 `--json` carries the same values as `probe` of each scenario:
 `{ "instances", "live", "peak", "allocations", "frees" }`. When no observed instance carries the
-probe, `probe` is `null` and the details line says "not observed". That is not zero: a module
+probe, `probe` is `null` ("not observed") and the details have no probe line. That is not zero: a module
 without the probe has not reported that it allocated nothing. With several instances the values
 are summed, and `instances` says how many of the observed ones carried the probe; the sum of
 peaks is an upper bound of the peak of the sum.
@@ -84,5 +84,5 @@ without the probe, `wasm-opt -Oz`), the scenario of the project's own `peakmark.
 | lightweight-pdf | identical, 3.4 MiB at every run | 156.1 ms plain, 161.7 ms probed (100 runs) | 1,257,425 B → 1,255,584 B |
 
 The traces matched page for page, and the runtime differences are within the spread of the
-runs in both directions. The file got a little smaller, not larger; this is not a claim
-about every module.
+runs in both directions. The two probed files happen to be about 1–2 KB smaller than the
+plain ones; that is an observation on these two builds, with no cause attached.

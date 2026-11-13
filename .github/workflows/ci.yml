@@ -28,3 +28,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features --locked
+      # The probe crate is a standalone workspace, so the root commands do not reach it.
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: probe
+      - run: cargo test --locked
+        working-directory: probe

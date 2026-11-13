@@ -274,7 +274,9 @@ fn detail_groups(results: &[ModuleResult]) -> Vec<FindingGroup> {
         ));
         for scenario in &result.measured.scenarios {
             measured = measured.add_finding(Finding::new(Tone::Info, trace(scenario)));
-            measured = measured.add_finding(Finding::new(Tone::Info, probe_line(scenario)));
+            if let Some(line) = probe_line(scenario) {
+                measured = measured.add_finding(Finding::new(Tone::Info, line));
+            }
         }
     }
     let mut groups = vec![measured];
@@ -774,29 +776,25 @@ fn trace(scenario: &ScenarioResult) -> String {
     )
 }
 
-/// The allocator probe of one scenario, as observed values. Without a probe it
-/// says so; it never prints zeros for what was not observed.
-fn probe_line(scenario: &ScenarioResult) -> String {
-    let id = scenario.id();
-    match scenario.probe {
-        None => {
-            format!("{id}: allocator probe not observed (module does not carry peakmark-probe)")
-        }
-        Some(probe) => format!(
-            "{id}: allocator probe, requested live {} at the end, peak {}, {} allocations, {} frees, in {} of {} instance{} (requested bytes, not capacity)",
-            format_binary(probe.live),
-            format_binary(probe.peak),
-            probe.allocations,
-            probe.frees,
-            probe.instances,
-            scenario.coverage.instances,
-            if scenario.coverage.instances == 1 {
-                ""
-            } else {
-                "s"
-            },
-        ),
-    }
+/// The allocator probe of one scenario, as observed values. A scenario whose
+/// module has no probe gets no line; `--json` says `null` for it.
+fn probe_line(scenario: &ScenarioResult) -> Option<String> {
+    let probe = scenario.probe?;
+    Some(format!(
+        "{}: allocator probe, requested live {} at the end, peak {}, {} allocations, {} frees, in {} of {} instance{} (requested bytes, not capacity)",
+        scenario.id(),
+        format_binary(probe.live),
+        format_binary(probe.peak),
+        probe.allocations,
+        probe.frees,
+        probe.instances,
+        scenario.coverage.instances,
+        if scenario.coverage.instances == 1 {
+            ""
+        } else {
+            "s"
+        },
+    ))
 }
 
 fn finding(issue: &Issue) -> Finding {
