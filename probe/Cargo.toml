@@ -1,0 +1,20 @@
+[package]
+name = "peakmark-probe"
+version = "0.1.0"
+edition = "2024"
+description = "Opt-in allocator wrapper that lets peakmark observe requested-live bytes, peak and event counts of a WebAssembly module"
+license = "MIT"
+repository = "https://github.com/casoon/peakmark"
+readme = "README.md"
+keywords = ["wasm", "webassembly", "allocator", "memory"]
+categories = ["wasm", "development-tools", "memory-management"]
+
+# Standalone: not part of the peakmark build, and no dependencies.
+[workspace]
+
+[lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

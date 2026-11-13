@@ -88,6 +88,26 @@ pub struct Coverage {
     pub unobserved: Vec<Unobserved>,
 }
 
+/// What the allocator probe (`peakmark-probe`) reported, summed over the
+/// instances that carry it. These are observed values of what the module
+/// requested from its allocator, not of the memory it reserved; no budget or
+/// baseline applies to them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeValues {
+    /// How many observed instances carry the probe; see `coverage.instances`
+    /// for how many were observed.
+    pub instances: u32,
+    /// Bytes requested and not yet freed at the end of the scenario.
+    pub live: u64,
+    /// The highest requested-live value reached. With several instances, the
+    /// sum of their peaks.
+    pub peak: u64,
+    /// Allocations, each `realloc` included.
+    pub allocations: u64,
+    /// Frees, each `realloc` included.
+    pub frees: u64,
+}
+
 /// What one scenario measured. Memory values are the summed capacity of the
 /// observed memories of the configured module: the pages the instance has
 /// reserved, not what is allocated in them.
@@ -110,6 +130,9 @@ pub struct ScenarioResult {
     pub memories: Vec<MemoryTrace>,
     /// What was and was not observed.
     pub coverage: Coverage,
+    /// What the allocator probe reported; `None` (`null` in JSON) if no
+    /// observed instance carries it. That is "not observed", never zero.
+    pub probe: Option<ProbeValues>,
     /// Milliseconds instantiation took.
     pub instantiate_ms: f64,
     /// How often the script ran on the instance.
@@ -153,6 +176,8 @@ struct RunnerResult {
     node: String,
     memories: Vec<MemoryTrace>,
     coverage: RunnerCoverage,
+    #[serde(default)]
+    probe: Option<ProbeValues>,
 }
 
 #[derive(Deserialize)]
@@ -433,6 +458,7 @@ fn summarise(file: &Path, result: RunnerResult, declared_memories: u32) -> Scena
         node: result.node,
         after_run: result.after_run,
         memories: result.memories,
+        probe: result.probe,
         coverage: Coverage {
             instances: result.coverage.instances,
             unrelated_instances: result.coverage.unrelated,
@@ -452,6 +478,7 @@ mod tests {
             instantiate_ms: 1.0,
             node: "v22.0.0".to_string(),
             memories: Vec::new(),
+            probe: None,
             coverage: RunnerCoverage {
                 instances: 1,
                 unrelated: 0,
@@ -522,6 +549,24 @@ mod tests {
             summary.coverage.unobserved,
             vec![Unobserved::Workers { count: 2 }]
         );
+    }
+
+    #[test]
+    fn an_absent_probe_is_not_observed_rather_than_zero() {
+        assert_eq!(summary(&[100, 100]).probe, None);
+        let line = r#"{"afterInstantiate":65536,"afterRun":[65536],"instantiateMs":1.0,"node":"v22","memories":[],
+            "coverage":{"instances":1,"unrelated":0,"workers":0,"perInstance":[1]},
+            "probe":{"instances":1,"live":10,"peak":30,"allocations":4,"frees":3}}"#;
+        let parsed: RunnerResult = serde_json::from_str(line).unwrap();
+        let probe = summarise(Path::new("s.mjs"), parsed, 1).probe.unwrap();
+        assert_eq!(
+            (probe.live, probe.peak, probe.allocations, probe.frees),
+            (10, 30, 4, 3)
+        );
+        // A runner result without the field at all, such as an older one, is also not observed.
+        let without = line.replace("\"probe\"", "\"other\"");
+        let parsed: RunnerResult = serde_json::from_str(&without).unwrap();
+        assert_eq!(summarise(Path::new("s.mjs"), parsed, 1).probe, None);
     }
 
     #[test]

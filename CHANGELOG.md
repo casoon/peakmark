@@ -8,6 +8,10 @@ change the configuration, the baseline format or the output.
 
 ### Added
 
+- **Allocator probe:** the opt-in crate `peakmark-probe` exports a Rust module's requested-live
+  bytes, peak and allocation counts; `check --details` and `--json` report them, as `null`
+  ("not observed") without the probe. Details:
+  [Allocator probe](https://casoon.github.io/peakmark/docs/guides/allocator-probe/).
 - **Config:** `scenario_timeout` and a `timeout` per `[[scenario]]` set how long a scenario may
   run; the default is 60 seconds. Details:
   [Limits](https://casoon.github.io/peakmark/docs/reference/limits/#scenario-deadline).

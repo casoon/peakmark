@@ -274,6 +274,9 @@ fn detail_groups(results: &[ModuleResult]) -> Vec<FindingGroup> {
         ));
         for scenario in &result.measured.scenarios {
             measured = measured.add_finding(Finding::new(Tone::Info, trace(scenario)));
+            if let Some(line) = probe_line(scenario) {
+                measured = measured.add_finding(Finding::new(Tone::Info, line));
+            }
         }
     }
     let mut groups = vec![measured];
@@ -771,6 +774,27 @@ fn trace(scenario: &ScenarioResult) -> String {
         format_binary(scenario.warmup_growth),
         scenario.repeat,
     )
+}
+
+/// The allocator probe of one scenario, as observed values. A scenario whose
+/// module has no probe gets no line; `--json` says `null` for it.
+fn probe_line(scenario: &ScenarioResult) -> Option<String> {
+    let probe = scenario.probe?;
+    Some(format!(
+        "{}: allocator probe, requested live {} at the end, peak {}, {} allocations, {} frees, in {} of {} instance{} (requested bytes, not capacity)",
+        scenario.id(),
+        format_binary(probe.live),
+        format_binary(probe.peak),
+        probe.allocations,
+        probe.frees,
+        probe.instances,
+        scenario.coverage.instances,
+        if scenario.coverage.instances == 1 {
+            ""
+        } else {
+            "s"
+        },
+    ))
 }
 
 fn finding(issue: &Issue) -> Finding {

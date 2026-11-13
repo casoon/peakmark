@@ -116,6 +116,13 @@ sections, and the time instantiation took. These values are reported and never f
 What the module imports, exports and requires is the [inventory](../inventory/), read from the file
 without running it.
 
+## Allocator probe
+
+A Rust module that installs the opt-in [allocator probe](../../guides/allocator-probe/) also
+reports what it requested from its allocator: live bytes at the end, their peak, and the numbers
+of allocations and frees. These are observed values of a different thing than capacity, they are
+`null` ("not observed") without the probe, and they never decide a check.
+
 ## Compression
 
 gzip and brotli sizes come from peakmark's own encoders. brotli is a Rust implementation: on the

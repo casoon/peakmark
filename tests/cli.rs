@@ -1886,3 +1886,54 @@ fn explanations_come_after_the_hard_failure_and_change_neither_exit_code_nor_fil
     assert!(!project.exists("peakmark.baseline.json"));
     assert!(!project.exists("peakmark.history.jsonl"));
 }
+
+/// A module that carries the allocator probe exports with fixed values.
+fn probed_module() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (memory (export "memory") 1)
+            (func (export "grow") (param i32) (result i32) local.get 0 memory.grow)
+            (func (export "peakmark_probe_version") (result i32) i32.const 1)
+            (func (export "peakmark_probe_live") (result i64) i64.const 2048)
+            (func (export "peakmark_probe_peak") (result i64) i64.const 10240)
+            (func (export "peakmark_probe_allocations") (result i64) i64.const 7)
+            (func (export "peakmark_probe_frees") (result i64) i64.const 5))"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_module_with_the_probe_reports_observed_values_in_details_and_json() {
+    let project = Project::new("probe-present", &config("", "steady.mjs", 3));
+    project.write("fixture.wasm", probed_module());
+
+    let run = project.run(&["check", "--details"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "allocator probe, requested live 2.0 KiB");
+    assert_contains(
+        &run.stdout,
+        "peak 10.0 KiB, 7 allocations, 5 frees, in 1 of 1 instance",
+    );
+
+    let run = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let probe = &result["modules"][0]["scenarios"][0]["probe"];
+    assert_eq!(probe["live"], 2048);
+    assert_eq!(probe["peak"], 10_240);
+    assert_eq!(probe["allocations"], 7);
+    assert_eq!(probe["frees"], 5);
+    assert_eq!(probe["instances"], 1);
+}
+
+#[test]
+fn a_module_without_the_probe_is_not_observed_rather_than_zero() {
+    let project = Project::new("probe-absent", &config("", "steady.mjs", 3));
+
+    let run = project.run(&["check", "--details"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(!run.stdout.contains("allocator probe"), "{}", run.stdout);
+
+    let run = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert!(result["modules"][0]["scenarios"][0]["probe"].is_null());
+}
