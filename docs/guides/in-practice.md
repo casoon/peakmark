@@ -15,7 +15,7 @@ this documentation. The values are the ones in each project's `peakmark.baseline
 | opengrid | `collation` | 1.19 MB | 441.3 kB | 333.2 kB | not run |
 | chartlet | `chartlet` | 2.43 MB | 916.6 kB | 647.2 kB | 1.4 MiB peak, 0 B growth per run |
 | lightweight-pdf | `lightweight-pdf` | 1.26 MB | 597.3 kB | 400.5 kB | 3.2 MiB peak, 0 B growth per run |
-| barrierlab | `a11y-wasm` | 877.6 kB | 247.1 kB | 186.1 kB | not run |
+| barrierlab | `a11y-wasm` | 403.0 kB | 168.3 kB | 138.3 kB | not run |
 
 ## opengrid: every change of size has a reason
 
@@ -70,9 +70,12 @@ For lightweight-pdf, `check --details` also shows where the 1.26 MB come from: 8
 which two segments of about 230 kB each are the largest, and 401 kB are code. peakmark reports the
 sizes, not what the data is.
 
-`barrierlab` points at the output of `cargo build`, before `wasm-bindgen` ran. That file carries
-1399 exports named `__wbindgen_describe_*`, which the processed module does not, so its 877.6 kB are
-not the size the package ships. Point `artifact` at the file that is published.
+barrierlab's first measurement pointed at the output of `cargo build`, before `wasm-bindgen` ran. peakmark
+measured it without complaint: 877.6 kB raw, with 1399 exports named `__wbindgen_describe_*`. Pointing
+`artifact` at the published file, `packages/a11y-wasm/pkg/a11y_wasm_bg.wasm`, gives 403.0 kB, and
+`check` reported what changed against the first baseline: 1409 exports removed, 20 added, and the
+sizes of five functions and the sections. That is why the table shows the second value. peakmark
+cannot tell which of two files is the one that ships; the `artifact` path is the project's decision.
 
 ## What this shows
 
