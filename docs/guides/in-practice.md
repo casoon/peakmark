@@ -20,13 +20,13 @@ this documentation. The values are the ones in each project's `peakmark.baseline
 ## opengrid: every change of size has a reason
 
 opengrid ships four modules and gates each one with a brotli budget, plus a memory scenario for the
-engine and the workbook writer. The history file shows what `peakmark accept` recorded in four
-days:
+engine and the workbook writer. The latest entries of the history file show what
+`peakmark accept` recorded:
 
 - **2026-11-11:** header texts in the workbook writer grew `xlsx` by 1.8 KiB; the budget was raised
   to 250000 B on purpose.
 - **2026-11-12:** `wasm-opt --low-memory-unused` made `elements`, `engine` and `xlsx` smaller; the
-  budgets were lowered to about 1 % over the new size.
+  budgets were set to about 1 % over the new size.
 - **2026-11-12:** the first memory scenario (50k rows in five pieces) found a peak of 56.9 MiB and
   no growth per run, and set the budget at 64 MiB.
 - **2026-11-13:** locale-aware sorting added 1.4 KiB to `elements`, 4.2 KiB to `engine` and a
