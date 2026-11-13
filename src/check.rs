@@ -566,6 +566,7 @@ mod tests {
                 unrelated_instances: 0,
                 unobserved: Vec::new(),
             },
+            probe: None,
             peak_memory: pages * PAGE,
             growth_per_run: (repeat > 1).then_some(0),
             instantiate_ms: 1.0,

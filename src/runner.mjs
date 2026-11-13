@@ -37,6 +37,9 @@ let instances = 0;
 let unrelated = 0;
 let workers = 0;
 const perInstance = [];
+// Instances whose module carries peakmark-probe: the exports to read at the end.
+const probes = [];
+const PROBE_VERSION = 1;
 
 const record = (memory, origin) => {
   const known = byMemory.get(memory);
@@ -74,6 +77,16 @@ const watch = (instance, module, imports) => {
     }
   }
   perInstance.push(seen);
+  const { exports } = instance;
+  if (
+    typeof exports.peakmark_probe_version === "function" &&
+    exports.peakmark_probe_version() === PROBE_VERSION &&
+    ["live", "peak", "allocations", "frees"].every(
+      (name) => typeof exports[`peakmark_probe_${name}`] === "function",
+    )
+  ) {
+    probes.push(exports);
+  }
 };
 
 const instantiate = WebAssembly.instantiate;
@@ -145,6 +158,19 @@ const sample = () => {
   return bytes;
 };
 
+// Reads the probe of every instance that has one and sums the values; `null`
+// if no instance has one, which is not the same as zero.
+const readProbes = () => {
+  if (probes.length === 0) return null;
+  const sum = { instances: probes.length, live: 0, peak: 0, allocations: 0, frees: 0 };
+  for (const exports of probes) {
+    for (const name of ["live", "peak", "allocations", "frees"]) {
+      sum[name] += Number(exports[`peakmark_probe_${name}`]());
+    }
+  }
+  return sum;
+};
+
 try {
   const started = performance.now();
   let module;
@@ -200,6 +226,7 @@ try {
       afterRun: entry.trace.slice(1),
     })),
     coverage: { instances, unrelated, workers, perInstance },
+    probe: readProbes(),
   });
   process.stdout.write("PEAKMARK_RESULT " + result + "\n", () => process.exit(0));
 } catch (error) {
