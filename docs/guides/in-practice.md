@@ -13,9 +13,9 @@ this documentation. The values are the ones in each project's `peakmark.baseline
 | opengrid | `engine` | 481.4 kB | 202.0 kB | 163.5 kB | 23.6 MiB peak, 0 B growth per run |
 | opengrid | `xlsx` | 672.7 kB | 299.1 kB | 246.7 kB | 56.9 MiB peak, 0 B growth per run |
 | opengrid | `collation` | 1.19 MB | 441.3 kB | 333.2 kB | not run |
-| chartlet | `chartlet` | 2.43 MB | 916.6 kB | 647.2 kB | not run |
-| lightweight-pdf | `lightweight-pdf` | 1.26 MB | 597.3 kB | 400.5 kB | not run |
-| barrierlab | `a11y-wasm` | 877.6 kB | 247.1 kB | 186.1 kB | not run |
+| chartlet | `chartlet` | 2.43 MB | 916.6 kB | 647.2 kB | 1.4 MiB peak, 0 B growth per run |
+| lightweight-pdf | `lightweight-pdf` | 1.26 MB | 597.3 kB | 400.5 kB | 3.2 MiB peak, 0 B growth per run |
+| barrierlab | `a11y-wasm` | 403.0 kB | 168.3 kB | 138.3 kB | not run |
 
 ## opengrid: every change of size has a reason
 
@@ -56,12 +56,26 @@ brotli = "653800 B"
 ```
 
 From then on `peakmark check` fails when the module grows past its budget, and warns when the
-baseline no longer matches. These checks are size only; none of them has a scenario yet, so memory
-is not measured.
+baseline no longer matches.
 
-`barrierlab` points at the output of `cargo build`, before `wasm-bindgen` ran. That file carries
-1399 exports named `__wbindgen_describe_*`, which the processed module does not, so its 877.6 kB are
-not the size the package ships. Point `artifact` at the file that is published.
+chartlet and lightweight-pdf then got one scenario each. chartlet's module has no glue, so the
+scenario copies a request in, renders the monthly-revenue chart as SVG and HTML and frees both
+buffers, which is what the package's own wrapper does; 20 runs peak at 1.4 MiB, with 64 KiB added in
+the first run and nothing after. lightweight-pdf's scenario renders a 40-row invoice table; 10 runs
+peak at 3.2 MiB, with 1.4 MiB added in the first run and nothing after. In both, the growth budget
+is `"0"` and the peak budget about 10 % over the measurement. barrierlab has no scenario yet, so its
+memory is not measured.
+
+For lightweight-pdf, `check --details` also shows where the 1.26 MB come from: 852 kB are data, of
+which two segments of about 230 kB each are the largest, and 401 kB are code. peakmark reports the
+sizes, not what the data is.
+
+barrierlab's first measurement pointed at the output of `cargo build`, before `wasm-bindgen` ran. peakmark
+measured it without complaint: 877.6 kB raw, with 1399 exports named `__wbindgen_describe_*`. Pointing
+`artifact` at the published file, `packages/a11y-wasm/pkg/a11y_wasm_bg.wasm`, gives 403.0 kB, and
+`check` reported what changed against the first baseline: 1409 exports removed, 20 added, and the
+sizes of five functions and the sections. That is why the table shows the second value. peakmark
+cannot tell which of two files is the one that ships; the `artifact` path is the project's decision.
 
 ## What this shows
 
