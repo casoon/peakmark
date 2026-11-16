@@ -590,6 +590,7 @@ mod tests {
             inventory: crate::inventory::Inventory::default(),
             reach: crate::reach::ReachReport::default(),
             scenarios,
+            load_group: None,
             artifact_sha256: "artifact".to_string(),
         }
     }

@@ -10,6 +10,7 @@ use crate::inventory::{
     CustomKind, ExternType, FeatureUse, FunctionBody, ImportName, Inventory, MemoryType, Names,
     SectionKind, TableType, TargetFeatureMode,
 };
+use crate::load_group::Reason as Skipped;
 use crate::reach::{Edge, Hop, Node, ReachReport, Reachability};
 use crate::runner::{ScenarioResult, Unobserved};
 use crate::snapshot::{
@@ -272,6 +273,9 @@ fn detail_groups(results: &[ModuleResult]) -> Vec<FindingGroup> {
                 result.measured.values.summary()
             ),
         ));
+        if let Some(line) = load_group_line(result) {
+            measured = measured.add_finding(Finding::new(Tone::Info, line));
+        }
         for scenario in &result.measured.scenarios {
             measured = measured.add_finding(Finding::new(Tone::Info, trace(scenario)));
             if let Some(line) = probe_line(scenario) {
@@ -774,6 +778,48 @@ fn trace(scenario: &ScenarioResult) -> String {
         format_binary(scenario.warmup_growth),
         scenario.repeat,
     )
+}
+
+/// What a page loads next to the module, as observed values. A module without
+/// glue gets no line; `--json` says `null` for it. Never gated.
+fn load_group_line(result: &ModuleResult) -> Option<String> {
+    let group = result.measured.load_group.as_ref()?;
+    let mut counts: Vec<(Skipped, usize)> = Vec::new();
+    for skipped in &group.not_followed {
+        match counts
+            .iter_mut()
+            .find(|(reason, _)| *reason == skipped.reason)
+        {
+            Some((_, count)) => *count += 1,
+            None => counts.push((skipped.reason, 1)),
+        }
+    }
+    let coverage = if counts.is_empty() {
+        "every reference followed".to_string()
+    } else {
+        let parts: Vec<_> = counts
+            .iter()
+            .map(|(reason, count)| {
+                let what = match reason {
+                    Skipped::Dynamic => "dynamic",
+                    Skipped::Missing => "missing",
+                    Skipped::OutsideDirectory => "outside the glue's directory",
+                    Skipped::NotRelative => "not a relative file",
+                };
+                format!("{count} {what}")
+            })
+            .collect();
+        format!("not followed: {}", parts.join(", "))
+    };
+    Some(format!(
+        "{}: glue and files it loads (observed, not gated), {} file{}, raw {}, gzip {}, brotli {}, each compressed on its own and summed; {coverage}",
+        result.module.name,
+        group.files.len(),
+        if group.files.len() == 1 { "" } else { "s" },
+        format_decimal(group.raw),
+        format_decimal(group.gzip),
+        format_decimal(group.brotli),
+    ))
 }
 
 /// The allocator probe of one scenario, as observed values. A scenario whose

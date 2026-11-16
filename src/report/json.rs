@@ -50,6 +50,7 @@ pub fn json(results: &[ModuleResult]) -> serde_json::Value {
                 "inventory": result.measured.inventory,
                 "reach": reach(&result.measured.inventory, &result.measured.reach),
                 "scenarios": result.measured.scenarios,
+                "load_group": result.measured.load_group,
                 "issues": issues,
                 "changes": result.changes.iter().map(change).collect::<Vec<_>>(),
                 "violations": result.violations.iter().map(violation).collect::<Vec<_>>(),

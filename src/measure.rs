@@ -8,6 +8,7 @@ use crate::config::{Config, Module};
 use crate::digest::sha256;
 use crate::error::Error;
 use crate::inventory::Inventory;
+use crate::load_group::{LoadGroup, measure as measure_load_group};
 use crate::metric::{Metric, Values};
 use crate::reach::{Reach, ReachReport};
 use crate::runner::{ScenarioResult, run_scenario};
@@ -28,6 +29,9 @@ pub struct Measured {
     pub reach: ReachReport,
     /// One result per configured scenario.
     pub scenarios: Vec<ScenarioResult>,
+    /// The glue and the files it reaches, measured for what a page loads;
+    /// `None` if the module has no glue. Observed, never gated or accepted.
+    pub load_group: Option<LoadGroup>,
     /// SHA-256 of the artifact. It changes with every build and identifies
     /// the file; it never decides whether values are comparable.
     pub artifact_sha256: String,
@@ -101,6 +105,11 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         peak_memory: scenarios.iter().map(|s| s.peak_memory).max(),
         growth_per_run: scenarios.iter().filter_map(|s| s.growth_per_run).max(),
     };
+    let load_group = module
+        .glue
+        .as_deref()
+        .map(|glue| measure_load_group(&config.dir.join(glue), &config.dir.join(&module.artifact)))
+        .transpose()?;
     Ok(Measured {
         values,
         sections: inspection.sections,
@@ -108,6 +117,7 @@ pub fn measure(config: &Config, module: &Module) -> Result<Measured, Error> {
         inventory: inspection.inventory,
         reach,
         scenarios,
+        load_group,
         artifact_sha256: sha256(&bytes),
     })
 }

@@ -8,6 +8,11 @@ change the configuration, the baseline format or the output.
 
 ### Added
 
+- **Load group:** for a module with a `glue`, `check --details` and `--json` (`load_group`) show
+  the raw, gzip and brotli size of the glue and of the files it reaches by static relative
+  `import`, `export ... from` and `new URL(..., import.meta.url)`, with what was not followed.
+  Observed only: no budget, no baseline, no verdict. Details:
+  [Measurements](https://casoon.github.io/peakmark/docs/concepts/measurements/#glue-and-the-files-it-loads).
 - **Allocator probe:** the opt-in crate `peakmark-probe` exports a Rust module's requested-live
   bytes, peak and allocation counts; `check --details` and `--json` report them, as `null`
   ("not observed") without the probe. Details:
