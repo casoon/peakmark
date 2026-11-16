@@ -8,6 +8,9 @@ change the configuration, the baseline format or the output.
 
 ### Added
 
+- **Unprocessed artifact:** `check` notes (rule `artifact/unprocessed-bindgen`, JSON `notes`) when
+  the artifact exports functions named `__wbindgen_describe_*`, which `wasm-bindgen` removes when it
+  processes a module. A note only, never a failure; peakmark cannot know which file you ship.
 - **Load group:** for a module with a `glue`, `check --details` and `--json` (`load_group`) show
   the raw, gzip and brotli size of the glue and of the files it reaches by static relative
   `import`, `export ... from` and `new URL(..., import.meta.url)`, with what was not followed.

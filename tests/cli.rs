@@ -2010,3 +2010,49 @@ fn a_glue_that_cannot_be_read_is_an_error() {
     let run = project.run(&["check"]);
     assert_ne!(run.code, 0);
 }
+
+#[test]
+fn exports_that_wasm_bindgen_removes_are_noted_and_never_fail() {
+    let project = Project::new("unprocessed-bindgen", &config("", "steady.mjs", 3));
+    project.write(
+        "fixture.wasm",
+        wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "grow") (param i32) (result i32)
+                    local.get 0
+                    memory.grow)
+                (func (export "__wbindgen_describe_add"))
+                (func (export "__wbindgen_describe_sub")))"#,
+        )
+        .unwrap(),
+    );
+
+    let run = project.run(&["check"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("exports 2 functions named"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("artifact/unprocessed-bindgen"),
+        "{}",
+        run.stdout
+    );
+
+    let run = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(
+        result["modules"][0]["notes"][0]["rule"],
+        "artifact/unprocessed-bindgen"
+    );
+}
+
+#[test]
+fn a_module_without_those_exports_has_no_note() {
+    let project = Project::new("processed-bindgen", &config("", "steady.mjs", 3));
+    let run = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(result["modules"][0]["notes"], serde_json::json!([]));
+}

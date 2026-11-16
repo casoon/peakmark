@@ -179,6 +179,39 @@ pub struct ModuleResult<'a> {
     /// The best explanations of the findings above, from evidence already
     /// held. They never change a verdict.
     pub explanations: Explained,
+    /// What the artifact looks like, stated without judging it.
+    pub notes: Vec<Note>,
+}
+
+/// An observation about the artifact that is neither a budget nor a baseline
+/// matter. It never changes a verdict.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Note {
+    /// The rule id of the note.
+    pub rule: &'static str,
+    /// What was seen, and what was not looked at.
+    pub message: String,
+}
+
+/// The prefix of the exports `wasm-bindgen` removes when it processes a module.
+const BINDGEN_DESCRIBE: &str = "__wbindgen_describe_";
+
+/// Notes on the artifact, read from its export names alone.
+fn notes(inventory: &Inventory) -> Vec<Note> {
+    let describe = inventory
+        .exports
+        .iter()
+        .filter(|export| export.name.starts_with(BINDGEN_DESCRIBE))
+        .count();
+    if describe == 0 {
+        return Vec::new();
+    }
+    vec![Note {
+        rule: "artifact/unprocessed-bindgen",
+        message: format!(
+            "The artifact exports {describe} functions named `{BINDGEN_DESCRIBE}*`, which `wasm-bindgen` removes when it processes a module. It looks like the output of `cargo build` before `wasm-bindgen`. peakmark cannot know which file you ship; if it is the processed one, point `artifact` at it. Only the export names were read."
+        ),
+    }]
 }
 
 impl ModuleResult<'_> {
@@ -259,6 +292,7 @@ pub fn evaluate<'a>(
         compare_module(entry, &measured, &mut changes);
     }
     let violations = evaluate_policy(&module.policy, &measured.inventory);
+    let notes = notes(&measured.inventory);
     let mut result = ModuleResult {
         module,
         measured,
@@ -267,6 +301,7 @@ pub fn evaluate<'a>(
         changes,
         violations,
         explanations: Explained::default(),
+        notes,
     };
     result.explanations = explain(&result);
     result
