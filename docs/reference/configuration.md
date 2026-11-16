@@ -43,7 +43,7 @@ Durations take `ms`, `s` or `m` (`"500ms"`, `"30s"`, `"2m"`) and must be longer 
 |---|---|
 | `name` | the name used in reports and by `accept`; each name once |
 | `artifact` | the `.wasm` file |
-| `glue` | optional: the `wasm-bindgen` JavaScript glue, loaded as an ES module |
+| `glue` | optional: the `wasm-bindgen` JavaScript glue, loaded as an ES module; also [measured with the files it loads](../../concepts/measurements/#glue-and-the-files-it-loads) |
 | `[module.budget]` | optional limits: `raw`, `gzip`, `brotli`, `peak_memory`, `growth_per_run` |
 | `[module.policy]` | optional compatibility rules for the [inventory](../../concepts/inventory/#policy): `require_exports`, `allow_imports`, `allow_features` |
 

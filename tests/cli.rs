@@ -1937,3 +1937,76 @@ fn a_module_without_the_probe_is_not_observed_rather_than_zero() {
     let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
     assert!(result["modules"][0]["scenarios"][0]["probe"].is_null());
 }
+
+const GLUE: &str = "import { a } from './snippets/a.js';
+const lazy = () => import('./lazy.js');
+export default async () => new URL('fixture.wasm', import.meta.url);
+";
+
+#[test]
+fn glue_and_its_snippets_are_observed_in_details_and_json_without_a_verdict() {
+    // No scenario: the scenario runner would load the glue as wasm-bindgen output.
+    let project = Project::new(
+        "load-group",
+        "[[module]]\nname = \"fixture\"\nartifact = \"fixture.wasm\"\nglue = \"glue.mjs\"\n",
+    );
+    std::fs::create_dir_all(project.dir.join("snippets")).unwrap();
+    project.write("glue.mjs", GLUE);
+    project.write("snippets/a.js", "export const a = 1;\n");
+
+    let run = project.run(&["check", "--details"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(
+        &run.stdout,
+        "glue and files it loads (observed, not gated), 2 files",
+    );
+    assert_contains(&run.stdout, "not followed: 1 dynamic");
+
+    let run = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let group = &result["modules"][0]["load_group"];
+    assert_eq!(group["files"][0]["path"], "glue.mjs");
+    assert_eq!(group["files"][1]["path"], "snippets/a.js");
+    assert_eq!(group["files"][1]["raw"], 20);
+    assert_eq!(group["not_followed"][0]["reason"], "dynamic");
+    assert_eq!(group["not_followed"][0]["specifier"], "./lazy.js");
+    let sum: u64 = group["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["brotli"].as_u64().unwrap())
+        .sum();
+    assert_eq!(group["brotli"], sum);
+
+    let accept = project.run(&["accept", "--all", "--reason", "first"]);
+    assert_eq!(accept.code, 0, "{}", accept.stderr);
+    assert!(
+        !project
+            .read("peakmark.baseline.json")
+            .contains("load_group")
+    );
+}
+
+#[test]
+fn a_module_without_glue_has_no_load_group_rather_than_zero() {
+    let project = Project::new("load-group-absent", &config("", "steady.mjs", 3));
+
+    let run = project.run(&["check", "--details"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(!run.stdout.contains("glue and files"), "{}", run.stdout);
+
+    let run = project.run(&["check", "--json"]);
+    let result: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert!(result["modules"][0]["load_group"].is_null());
+}
+
+#[test]
+fn a_glue_that_cannot_be_read_is_an_error() {
+    let configured = config("", "steady.mjs", 3).replace(
+        "artifact = \"fixture.wasm\"",
+        "artifact = \"fixture.wasm\"\nglue = \"nope.mjs\"",
+    );
+    let project = Project::new("load-group-missing-glue", &configured);
+    let run = project.run(&["check"]);
+    assert_ne!(run.code, 0);
+}

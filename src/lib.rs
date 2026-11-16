@@ -39,6 +39,7 @@ mod digest;
 pub mod error;
 pub mod explain;
 pub mod inventory;
+pub mod load_group;
 pub mod measure;
 pub mod metric;
 pub mod policy;

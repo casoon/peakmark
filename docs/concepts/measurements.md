@@ -123,6 +123,26 @@ reports what it requested from its allocator: live bytes at the end, their peak,
 of allocations and frees. These are observed values of a different thing than capacity, they are
 `null` ("not observed") without the probe, and they never decide a check.
 
+## Glue and the files it loads
+
+With a `glue`, a page downloads more than the `.wasm`. peakmark reads the glue as text (it is
+never executed) and follows static relative references: `import ... from "./x"`, `import "./x"`,
+`export ... from "./x"` and `new URL("./x", import.meta.url)`, recursively, with cycles cut. Each
+file found is compressed on its own and the group is their sum, so it is an estimate of what is
+sent, not of one bundled response. `check --details` shows one line per module; `--json` has a
+`load_group` object with `files` (path relative to the glue, `raw`, `gzip`, `brotli`), the sums
+and `not_followed`. The object is `null` ("not observed") for a module without a glue, never zero.
+
+Nothing here is gated, accepted into the baseline or part of a verdict. The scan is explicit about
+its coverage: `not_followed` lists, with the file and specifier, every dynamic `import()` and
+computed `new URL(...)` (`dynamic`), files that do not exist (`missing`), files outside the glue's
+directory (`outside_directory`) and specifiers that are not relative files such as `node:fs` or a
+URL (`not_relative`). The module itself is not counted again. Only `.js`, `.mjs` and `.cjs`
+files are scanned further; other files, such as one named by `new URL`, are measured as leaves.
+A glue that cannot be read is an error. The scanner is a small text scanner, not a JavaScript
+parser: it skips comments, strings, template literals and regular expression literals, and treats
+what it cannot classify as not found rather than guessing.
+
 ## Compression
 
 gzip and brotli sizes come from peakmark's own encoders. brotli is a Rust implementation: on the
