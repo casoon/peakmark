@@ -77,6 +77,23 @@ measured it without complaint: 877.6 kB raw, with 1399 exports named `__wbindgen
 sizes of five functions and the sections. That is why the table shows the second value. peakmark
 cannot tell which of two files is the one that ships; the `artifact` path is the project's decision.
 
+## A forgotten `free()`: the growth budget on a real module
+
+To see the growth budget fail on a real module, the lightweight-pdf scenario was run once with the
+final `pdf.free()` removed, the mistake the guide
+[Release what you allocate](../scenarios/#release-what-you-allocate) warns about. The module and the
+rest of the scenario are the same:
+
+| Scenario | Peak memory | Growth per run | Verdict |
+| --- | --- | --- | --- |
+| with `pdf.free()` | 3.2 MiB | 0 B | within budget |
+| without it (10 runs) | 11.1 MiB | 896.0 KiB | over budget, exit code 1 |
+
+`check` names both findings: `Memory growth per run 896.0 KiB, budget 0 B [mem/growth]` and
+`Peak memory 11.1 MiB, budget 3.5 MiB [mem/peak]`. The leak is a construction of this page, not a
+bug found in lightweight-pdf, and it shows page growth only: a leak that fits in pages the module
+already reserved would not appear (see the note above).
+
 ## What this shows
 
 - A budget with a written reason per change turns "the module grew" into a record that can be read
