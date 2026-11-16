@@ -146,6 +146,9 @@ fn module_group(result: &ModuleResult) -> Option<FindingGroup> {
             }
         }
     }
+    for note in &result.notes {
+        group = group.add_finding(Finding::new(Tone::Info, &note.message).with_rule_id(note.rule));
+    }
     if result.baseline.is_none() {
         group = group.add_finding(
             Finding::new(Tone::Warning, "No baseline accepted yet")
@@ -155,6 +158,7 @@ fn module_group(result: &ModuleResult) -> Option<FindingGroup> {
     let any = !result.issues.is_empty()
         || !result.violations.is_empty()
         || !result.changes.is_empty()
+        || !result.notes.is_empty()
         || result.baseline.is_none();
     any.then_some(group)
 }
