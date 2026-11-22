@@ -76,7 +76,7 @@ change the configuration, the baseline format or the output.
 
 ### Changed
 
-- **Pages:** the project site uses the current shared theme (0.16.2).
+- **Pages:** the project site uses the current shared theme (0.16.3).
 - **Memory:** values cover the instances of the configured artifact only; other modules a
   scenario loads are left out and a shared memory is counted once. Details:
   [What is covered](https://casoon.github.io/peakmark/docs/concepts/measurements/#what-is-covered).
