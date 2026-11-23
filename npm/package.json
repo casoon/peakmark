@@ -1,6 +1,6 @@
 {
   "name": "peakmark",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Gate WebAssembly modules on size and memory against a baseline kept in the repository",
   "license": "MIT",
   "keywords": ["wasm", "webassembly", "wasm-bindgen", "memory", "size", "budget"],
