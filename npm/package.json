@@ -1,0 +1,33 @@
+{
+  "name": "peakmark",
+  "version": "0.1.1",
+  "description": "Gate WebAssembly modules on size and memory against a baseline kept in the repository",
+  "license": "MIT",
+  "keywords": ["wasm", "webassembly", "wasm-bindgen", "memory", "size", "budget"],
+  "homepage": "https://casoon.github.io/peakmark/",
+  "bugs": "https://github.com/casoon/peakmark/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/casoon/peakmark.git",
+    "directory": "npm"
+  },
+  "bin": {
+    "peakmark": "bin/peakmark.js"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "bin/peakmark.js",
+    "bin/targets.js",
+    "vendor/*/peakmark"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/launcher.test.mjs",
+    "fetch:binaries": "node scripts/release-binaries.mjs fetch",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "node scripts/release-binaries.mjs verify"
+  }
+}

@@ -8,6 +8,10 @@ change the configuration, the baseline format or the output.
 
 ### Added
 
+- **npm:** the package `peakmark` (`npm install --save-dev peakmark`, `npx peakmark check`) ships
+  the release binaries for macOS and Linux, checked against the release checksums and build
+  provenance and published with npm provenance. Details:
+  [Installation](https://casoon.github.io/peakmark/docs/getting-started/installation/#from-npm).
 - **Config:** a JSON Schema of `peakmark.toml` at
   `https://casoon.github.io/peakmark/peakmark.schema.json` lets editors complete and check the
   file. Details:

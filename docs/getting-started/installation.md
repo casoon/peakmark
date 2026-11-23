@@ -1,8 +1,21 @@
 ---
 title: Installation
-description: Install peakmark from crates.io or from a verified release binary.
+description: Install peakmark from npm, from crates.io or from a verified release binary.
 order: 1
 ---
+
+## From npm
+
+```bash
+npm install --save-dev peakmark
+npx peakmark check
+```
+
+The package `peakmark` ships the binaries of the GitHub release of the same version for macOS
+(arm64, x64) and Linux (arm64, x64, statically linked). They are checked against the release's
+`SHA256SUMS` and build provenance before the package is published, and the package is published by
+the release workflow with npm provenance (`npm audit signatures` checks it). On another platform,
+install from crates.io.
 
 ## From crates.io
 

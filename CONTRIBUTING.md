@@ -11,7 +11,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-The tests that run scenarios need `node` on the `PATH`. Lints are configured in `Cargo.toml`
+The tests that run scenarios need `node` on the `PATH`. If you change the npm package in `npm/`,
+also run `npm test` there; its version has to equal the crate version. Lints are configured in `Cargo.toml`
 (`clippy::pedantic` with a few documented exceptions); a new `allow` needs a comment saying why.
 
 ## Changes

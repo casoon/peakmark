@@ -4,3 +4,6 @@
 /site/dist/
 /site/.astro/
 /probe/target/
+/npm/.release/
+/npm/vendor/
+/npm/*.tgz

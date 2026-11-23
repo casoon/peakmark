@@ -11,9 +11,9 @@ one thing to get right, locally and in CI.
 ## Locally
 
 ```bash
-cargo install peakmark
+npm install --save-dev peakmark   # or: cargo install peakmark
 # build the module the way you ship it, then:
-peakmark check
+npx peakmark check
 ```
 
 `check` exits 0 within budget, 1 over budget, 2 when it could not run. If a change is intended,
@@ -46,6 +46,9 @@ hash and its signed build provenance first, and then checks:
       - name: peakmark
         run: peakmark check --details
 ```
+
+In a project that has `peakmark` in its `devDependencies`, the step after `npm ci` is just
+`npx peakmark check --details`, and the lockfile pins the version.
 
 A failing `check` fails the job. Pin `PEAKMARK_VERSION` and raise it on purpose: a newer peakmark can
 read an older baseline, but it may report more than the version that wrote it.
