@@ -156,6 +156,43 @@ fn an_accepted_baseline_passes_and_is_logged_with_its_reason() {
 }
 
 #[test]
+fn history_lists_each_accepted_baseline_and_what_changed_since_the_one_before() {
+    let project = Project::new("history", &config("", "steady.mjs", 3));
+    let empty = project.run(&["history"]);
+    assert_eq!(empty.code, 0, "{}", empty.stderr);
+    assert_contains(&empty.stdout, "no accepted baseline to list");
+    assert_contains(&empty.stdout, "peakmark accept --all --reason");
+
+    project.run(&["accept", "--all", "--reason", "first measurement"]);
+    project.write("fixture.wasm", module(400));
+    project.run(&["accept", "fixture", "--reason", "bigger table"]);
+
+    let run = project.run(&["history"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_contains(&run.stdout, "peakmark history: fixture");
+    assert_contains(&run.stdout, "\"first measurement\": raw size");
+    assert_contains(&run.stdout, "\"bigger table\": raw size");
+    assert!(
+        !run.stdout.contains("bigger table\": raw size 0"),
+        "{}",
+        run.stdout
+    );
+
+    let json = project.run(&["history", "fixture", "--json"]);
+    assert_eq!(json.code, 0, "{}", json.stderr);
+    let document: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    let entries = &document["modules"][0]["entries"];
+    assert_eq!(entries.as_array().unwrap().len(), 2);
+    assert_eq!(entries[0]["first"], true);
+    assert_eq!(entries[1]["changes"][0]["rule"], "size/raw");
+    assert_eq!(entries[1]["changes"][0]["comparable"], true);
+
+    let unknown = project.run(&["history", "nope"]);
+    assert_eq!(unknown.code, 2);
+    assert_contains(&unknown.stderr, "no module `nope`");
+}
+
+#[test]
 fn peak_memory_over_the_budget_fails_and_points_at_the_scenario() {
     let project = Project::new(
         "over-peak",

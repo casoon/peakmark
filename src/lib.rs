@@ -38,6 +38,7 @@ mod date;
 mod digest;
 pub mod error;
 pub mod explain;
+pub mod history;
 pub mod inventory;
 pub mod load_group;
 pub mod measure;

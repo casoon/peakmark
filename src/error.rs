@@ -61,6 +61,15 @@ pub enum Error {
         /// The cause.
         source: serde_json::Error,
     },
+    /// A line of the history log is not an accepted entry.
+    HistorySyntax {
+        /// The history log.
+        path: PathBuf,
+        /// The line, counted from 1.
+        line: usize,
+        /// The cause.
+        source: serde_json::Error,
+    },
     /// The baseline file declares a format version this peakmark does not read.
     BaselineVersion {
         /// The baseline file.
@@ -166,6 +175,8 @@ pub enum UsageError {
     AcceptSelection,
     /// `accept` got no `--reason`, or an empty one.
     AcceptNeedsReason,
+    /// `--since` got something other than a `YYYY-MM-DD` date.
+    BadDate(String),
 }
 
 impl fmt::Display for UsageError {
@@ -184,6 +195,7 @@ impl fmt::Display for UsageError {
             Self::AcceptNeedsReason => {
                 write!(f, "accept needs --reason: a baseline changes on purpose")
             }
+            Self::BadDate(text) => write!(f, "`{text}` is not a date such as `2026-11-23`"),
         }
     }
 }
@@ -191,6 +203,8 @@ impl fmt::Display for UsageError {
 impl std::error::Error for UsageError {}
 
 impl fmt::Display for Error {
+    // One arm per variant: the function grows with the errors, not with its logic.
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(error) => error.fmt(f),
@@ -202,6 +216,9 @@ impl fmt::Display for Error {
             Self::ConfigSyntax { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Config { path, source } => write!(f, "{}: {source}", path.display()),
             Self::BaselineSyntax { path, source } => write!(f, "{}: {source}", path.display()),
+            Self::HistorySyntax { path, line, source } => {
+                write!(f, "{}:{line}: {source}", path.display())
+            }
             Self::BaselineVersion { path, found } => {
                 let (oldest, newest) = (baseline::OLDEST_VERSION, baseline::VERSION);
                 write!(f, "{} has format version {found}; ", path.display())?;
@@ -305,9 +322,9 @@ impl std::error::Error for Error {
             | Self::ScenarioWait { source, .. } => Some(source),
             Self::ConfigSyntax { source, .. } => Some(source),
             Self::Config { source, .. } => Some(source),
-            Self::BaselineSyntax { source, .. } | Self::ScenarioUnreadable { source, .. } => {
-                Some(source)
-            }
+            Self::BaselineSyntax { source, .. }
+            | Self::HistorySyntax { source, .. }
+            | Self::ScenarioUnreadable { source, .. } => Some(source),
             Self::InvalidModule { source, .. } | Self::UnsupportedFeature { source, .. } => {
                 Some(source)
             }

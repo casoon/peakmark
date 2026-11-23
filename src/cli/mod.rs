@@ -67,5 +67,17 @@ pub fn run(cli: Cli) -> Result<ExitCode, Error> {
             &reason,
             console,
         ),
+        Command::History {
+            modules,
+            since,
+            json,
+        } => commands::history(
+            &config,
+            &cli.config,
+            &modules,
+            since.as_deref(),
+            json,
+            console,
+        ),
     }
 }

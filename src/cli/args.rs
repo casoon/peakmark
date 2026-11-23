@@ -10,17 +10,20 @@ peakmark — gate WebAssembly modules on size and memory
 Usage:
   peakmark check [--details] [--json]
   peakmark accept (<module>... | --all) --reason <text>
+  peakmark history [<module>...] [--since <date>] [--json]
 
 Commands:
   check     Measure every module and compare it with its budget and baseline
   accept    Store the measured values as the new baseline
+  history   List the accepted baselines and what changed between them
 
 Options:
       --config <file>   Configuration file [default: peakmark.toml]
       --details         check: also list the measured values
-      --json            check: print JSON instead of the report
+      --json            check, history: print JSON instead of the report
       --all             accept: every configured module
       --reason <text>   accept: why the baseline changes
+      --since <date>    history: only baselines accepted on or after YYYY-MM-DD
       --color <mode>    auto, always or never [default: auto]
   -h, --help            Show this help
   -V, --version         Show the version
@@ -43,6 +46,15 @@ pub enum Command {
         modules: Vec<String>,
         /// Why the baseline changes.
         reason: String,
+    },
+    /// List the accepted baselines.
+    History {
+        /// The modules to list; empty means all of them.
+        modules: Vec<String>,
+        /// Only baselines accepted on or after this day, `YYYY-MM-DD`.
+        since: Option<String>,
+        /// Print JSON instead of the report.
+        json: bool,
     },
 }
 
@@ -79,6 +91,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, UsageErro
     let mut color = ColorMode::Auto;
     let (mut details, mut json, mut all) = (false, false, false);
     let mut reason = None;
+    let mut since = None;
 
     let value = |args: &mut dyn Iterator<Item = String>, option: &'static str| {
         args.next().ok_or(UsageError::MissingValue(option))
@@ -97,6 +110,13 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, UsageErro
             "--all" => all = true,
             "--config" => config = value(&mut args, "--config")?.into(),
             "--reason" => reason = Some(value(&mut args, "--reason")?),
+            "--since" => {
+                let date = value(&mut args, "--since")?;
+                if !is_date(&date) {
+                    return Err(UsageError::BadDate(date));
+                }
+                since = Some(date);
+            }
             "--color" => {
                 color = match value(&mut args, "--color")?.as_str() {
                     "auto" => ColorMode::Auto,
@@ -132,6 +152,11 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, UsageErro
                 reason,
             }
         }
+        Some("history") => Command::History {
+            modules: positional,
+            since,
+            json,
+        },
         Some(other) => return Err(UsageError::UnknownCommand(other.to_string())),
         None => return Ok(Parsed::Print(USAGE.to_string())),
     };
@@ -140,6 +165,17 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Parsed, UsageErro
         config,
         color,
     }))
+}
+
+/// Whether `text` has the shape `YYYY-MM-DD` the baseline writes dates in.
+/// It is compared as text, so the shape is what matters.
+fn is_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 #[cfg(test)]
@@ -202,6 +238,33 @@ mod tests {
             parse_args(&["accept", "--all", "--reason", "  "]).unwrap_err(),
             UsageError::AcceptNeedsReason
         );
+    }
+
+    #[test]
+    fn history_takes_optional_modules_a_date_and_json() {
+        let cli = run(&["history", "engine", "--since", "2026-11-01", "--json"]);
+        assert_eq!(
+            cli.command,
+            Command::History {
+                modules: vec!["engine".to_string()],
+                since: Some("2026-11-01".to_string()),
+                json: true
+            }
+        );
+        assert_eq!(
+            run(&["history"]).command,
+            Command::History {
+                modules: Vec::new(),
+                since: None,
+                json: false
+            }
+        );
+        for bad in ["yesterday", "2026-1-01", "2026/11/01", "2026-11-011"] {
+            assert_eq!(
+                parse_args(&["history", "--since", bad]).unwrap_err(),
+                UsageError::BadDate(bad.to_string())
+            );
+        }
     }
 
     #[test]

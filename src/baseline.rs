@@ -147,6 +147,16 @@ struct HistoryLine<'a> {
     entry: &'a Entry,
 }
 
+/// One line of [`HISTORY_FILE`]: a module and the entry accepted for it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Accepted {
+    /// The module the entry was accepted for.
+    pub module: String,
+    /// The accepted entry, as the baseline stored it at the time.
+    #[serde(flatten)]
+    pub entry: Entry,
+}
+
 #[derive(Deserialize)]
 struct Header {
     version: u32,
@@ -224,6 +234,34 @@ pub fn append_history(dir: &Path, module: &str, entry: &Entry) -> Result<(), Err
         .open(&path)
         .and_then(|mut file| writeln!(file, "{line}"))
         .map_err(|source| Error::Write { path, source })
+}
+
+/// Reads the history log in `dir`, oldest line first. A missing log is an
+/// empty history: nothing has been accepted yet. Lines from every peakmark
+/// version read, because an entry only ever gained optional fields.
+///
+/// # Errors
+///
+/// Fails if the log exists but cannot be read, or a line is not an accepted
+/// entry; the error names the line.
+pub fn load_history(dir: &Path) -> Result<Vec<Accepted>, Error> {
+    let path = dir.join(HISTORY_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(Error::Read { path, source }),
+    };
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            serde_json::from_str(line).map_err(|source| Error::HistorySyntax {
+                path: path.clone(),
+                line: index + 1,
+                source,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -304,6 +342,40 @@ mod tests {
         let history = std::fs::read_to_string(dir.join(HISTORY_FILE)).unwrap();
         assert_eq!(history.lines().count(), 2);
         assert!(history.contains(r#""module":"engine""#), "{history}");
+    }
+
+    #[test]
+    fn the_history_reads_back_in_order_and_a_missing_log_is_empty() {
+        let dir = scratch("history");
+        assert!(load_history(&dir).unwrap().is_empty());
+        let mut second = entry();
+        second.reason = "second".to_string();
+        append_history(&dir, "engine", &entry()).unwrap();
+        append_history(&dir, "ui", &second).unwrap();
+
+        let history = load_history(&dir).unwrap();
+        let read: Vec<_> = history
+            .iter()
+            .map(|line| (line.module.as_str(), line.entry.reason.as_str()))
+            .collect();
+        assert_eq!(read, [("engine", "first"), ("ui", "second")]);
+    }
+
+    #[test]
+    fn a_broken_history_line_names_the_file_and_the_line() {
+        let dir = scratch("history-broken");
+        append_history(&dir, "engine", &entry()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join(HISTORY_FILE))
+            .unwrap();
+        writeln!(file, "{{").unwrap();
+        let error = load_history(&dir).err().unwrap();
+        assert!(
+            matches!(error, Error::HistorySyntax { line: 2, .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains(HISTORY_FILE), "{error}");
     }
 
     #[test]
