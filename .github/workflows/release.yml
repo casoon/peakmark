@@ -17,6 +17,15 @@ name: Release
 # one. The release also carries a CycloneDX SBOM, attested against every
 # archive (actions/attest-sbom).
 #
+# The npm package `peakmark` is published by the last job, after the GitHub
+# release exists, through npm trusted publishing: the job exchanges a GitHub
+# OIDC token for npm, so no npm token is stored anywhere, and the package gets
+# a provenance statement. It runs in the `npm` environment, whose required
+# reviewer has to approve it. The binaries it ships are unpacked from the
+# archives of this release after they were checked against SHA256SUMS and
+# their build provenance (npm/scripts/release-binaries.mjs, run again by
+# prepublishOnly).
+#
 # workflow_dispatch runs the verification and the builds without releasing, as
 # a dry run before tagging.
 
@@ -47,6 +56,11 @@ jobs:
       - run: cargo test --all-features
       - name: Verify package
         run: cargo package --locked
+      - name: npm package
+        working-directory: npm
+        run: |
+          npm test
+          npm run pack:check
       - name: Tag matches crate version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -172,3 +186,33 @@ jobs:
         with:
           generate_release_notes: true
           files: dist/*
+
+  publish-npm:
+    name: Publish to npm
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5 or newer.
+      - run: npm install -g npm@11
+      - name: Fetch release archives
+        working-directory: npm
+        run: npm run fetch:binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Publish
+        working-directory: npm
+        run: npm publish --access public
+        env:
+          # prepublishOnly checks the archives and their attestations with `gh`.
+          GH_TOKEN: ${{ github.token }}

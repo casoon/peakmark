@@ -23,7 +23,12 @@ import hero from '../../../examples/no-baseline.ansi?raw';
     title="A budget for what your WebAssembly module costs."
     lead="peakmark measures a built .wasm module — its size on disk and on the wire, and the memory it holds after a scenario — and fails the check when it grows past a budget you set."
   >
-    <Install commands={[{ label: 'cargo', command: 'cargo install peakmark' }]} />
+    <Install
+      commands={[
+        { label: 'npm', command: 'npm install --save-dev peakmark' },
+        { label: 'cargo', command: 'cargo install peakmark' },
+      ]}
+    />
     <Badges>
       <Badge>MIT</Badge>
       <Badge>for wasm-bindgen modules</Badge>

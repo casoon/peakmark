@@ -16,7 +16,10 @@ export default defineConfig({
       version: '0.1.1',
       license: 'MIT',
       catalog: false,
-      packages: [{ label: 'crates.io', href: 'https://crates.io/crates/peakmark' }],
+      packages: [
+        { label: 'npm', href: 'https://www.npmjs.com/package/peakmark' },
+        { label: 'crates.io', href: 'https://crates.io/crates/peakmark' },
+      ],
       docsGroups: {
         'getting-started': 'Getting started',
         concepts: 'Concepts',

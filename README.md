@@ -17,8 +17,11 @@ Documentation: <https://casoon.github.io/peakmark/>
 ## Install
 
 ```bash
-cargo install peakmark
+npm install --save-dev peakmark
 ```
+
+or `cargo install peakmark`. The npm package ships the release binaries for
+macOS and Linux (arm64, x64).
 
 Official binaries come only from the GitHub releases of `casoon/peakmark`,
 built there by the release workflow, never on a developer machine. To verify a
