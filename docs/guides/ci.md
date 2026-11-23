@@ -32,7 +32,7 @@ hash and its signed build provenance first, and then checks:
       - name: Install peakmark
         env:
           GH_TOKEN: ${{ github.token }}
-          PEAKMARK_VERSION: "0.1.1"
+          PEAKMARK_VERSION: "0.2.0"
         run: |
           name="peakmark-${PEAKMARK_VERSION}-x86_64-unknown-linux-musl"
           gh release download "v${PEAKMARK_VERSION}" --repo casoon/peakmark \

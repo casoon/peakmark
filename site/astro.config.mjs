@@ -13,7 +13,7 @@ export default defineConfig({
         'Gate WebAssembly modules on size and memory against a baseline kept in the repository.',
       tagline: 'WebAssembly size and memory budgets',
       repo: 'casoon/peakmark',
-      version: '0.1.1',
+      version: '0.2.0',
       license: 'MIT',
       catalog: false,
       packages: [
