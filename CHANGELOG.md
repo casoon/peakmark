@@ -8,6 +8,10 @@ change the configuration, the baseline format or the output.
 
 ### Added
 
+- **Config:** a JSON Schema of `peakmark.toml` at
+  `https://casoon.github.io/peakmark/peakmark.schema.json` lets editors complete and check the
+  file. Details:
+  [Editor support](https://casoon.github.io/peakmark/docs/reference/configuration/#editor-support).
 - **History:** `peakmark history` lists the accepted baselines per module with their reason and
   what changed since the entry before, marks values measured under other settings as not
   comparable, and takes module names, `--since` and `--json`. Details:

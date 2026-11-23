@@ -9,9 +9,13 @@ The numbers on this page come from a real run: the engine module of
 
 ## 1. Describe the module
 
-Put `peakmark.toml` next to the baseline it will keep. Paths in it are relative to the file.
+Put `peakmark.toml` next to the baseline it will keep. Paths in it are relative to the file. The
+first line lets your editor complete and check it; see
+[Editor support](../../reference/configuration/#editor-support).
 
 ```toml
+#:schema https://casoon.github.io/peakmark/peakmark.schema.json
+
 [[module]]
 name     = "engine"
 artifact = "pkg/engine_bg.wasm"

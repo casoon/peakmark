@@ -299,7 +299,118 @@ fn resolve(raw: RawConfig, dir: PathBuf) -> Result<Config, ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+
+    /// The JSON Schema editors use for `peakmark.toml`, published with the site.
+    const SCHEMA: &str = include_str!("../peakmark.schema.json");
+
+    /// The names between backticks after `expected one of` in a serde error:
+    /// every key (or variant) the parser accepts at that place.
+    fn expected(error: &str) -> BTreeSet<String> {
+        let list = error
+            .split_once("expected one of ")
+            .or_else(|| error.split_once("expected "))
+            .unwrap_or_else(|| panic!("no list of expected names in: {error}"))
+            .1;
+        list.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    /// What the parser accepts at the place `toml` puts something unknown.
+    fn accepted(toml: &str) -> BTreeSet<String> {
+        let error = toml::from_str::<RawConfig>(toml)
+            .err()
+            .expect("the fixture has something unknown in it");
+        expected(&error.to_string())
+    }
+
+    fn schema_keys(object: &serde_json::Value) -> BTreeSet<String> {
+        object["properties"]
+            .as_object()
+            .expect("an object schema")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn the_schema_knows_exactly_the_keys_and_features_the_parser_accepts() {
+        let schema: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
+        let defs = &schema["$defs"];
+        let module = &defs["module"]["properties"];
+        let policy = &module["policy"]["properties"];
+        let module_line = "[[module]]\nname = \"m\"\nartifact = \"m.wasm\"\n";
+
+        let places = [
+            ("top level", "unknown = 1\n".to_string(), &schema),
+            (
+                "[[module]]",
+                format!("{module_line}unknown = 1\n"),
+                &defs["module"],
+            ),
+            (
+                "[module.budget]",
+                format!("{module_line}[module.budget]\nunknown = \"1\"\n"),
+                &module["budget"],
+            ),
+            (
+                "[module.policy]",
+                format!("{module_line}[module.policy]\nunknown = 1\n"),
+                &module["policy"],
+            ),
+            (
+                "require_exports",
+                format!("{module_line}[module.policy]\nrequire_exports = [{{ unknown = 1 }}]\n"),
+                &policy["require_exports"]["items"],
+            ),
+            (
+                "allow_imports",
+                format!("{module_line}[module.policy]\nallow_imports = [{{ unknown = 1 }}]\n"),
+                &policy["allow_imports"]["items"],
+            ),
+            (
+                "[[scenario]]",
+                "[[scenario]]\nunknown = 1\n".to_string(),
+                &defs["scenario"],
+            ),
+        ];
+        for (place, toml, object) in places {
+            assert_eq!(schema_keys(object), accepted(&toml), "keys of {place}");
+        }
+
+        let features: BTreeSet<String> = policy["allow_features"]["items"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap().to_string())
+            .collect();
+        let parsed = accepted(&format!(
+            "{module_line}[module.policy]\nallow_features = [\"unknown\"]\n"
+        ));
+        assert_eq!(features, parsed, "features of allow_features");
+    }
+
+    #[test]
+    fn the_schema_patterns_take_what_the_parser_reads() {
+        // The patterns are regular expressions; without a regex dependency the
+        // test checks the units they list against the ones the parser reads.
+        let schema: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
+        let size = schema["$defs"]["size"]["pattern"].as_str().unwrap();
+        for unit in ["B", "kB", "KB", "MB", "GB", "KiB", "MiB", "GiB"] {
+            assert!(size.contains(unit), "{unit} missing in {size}");
+            assert!(parse_bytes(&format!("1 {unit}")).is_ok(), "{unit}");
+        }
+        let duration = schema["$defs"]["duration"]["pattern"].as_str().unwrap();
+        assert!(duration.contains("(ms|s|m)"), "{duration}");
+        for text in ["500ms", "30s", "2m"] {
+            assert!(parse_duration(text).is_ok(), "{text}");
+        }
+    }
 
     fn parse(text: &str) -> Result<Config, ConfigError> {
         let raw: RawConfig = toml::from_str(text).expect("the fixture is valid TOML");

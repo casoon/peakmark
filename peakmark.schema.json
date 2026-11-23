@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://casoon.github.io/peakmark/peakmark.schema.json",
+  "title": "peakmark.toml",
+  "description": "The modules peakmark gates, their budgets and their scenarios. Paths are relative to this file. Reference: https://casoon.github.io/peakmark/docs/reference/configuration/",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["module"],
+  "properties": {
+    "tolerance": {
+      "description": "Growth over the baseline below this fraction is not reported. Default \"1%\".",
+      "type": "string",
+      "pattern": "^\\s*[0-9.]+\\s*%\\s*$",
+      "examples": ["1%"]
+    },
+    "scenario_timeout": {
+      "description": "How long a scenario may run before peakmark stops it, for every scenario that sets no `timeout`. Default \"60s\"; must be longer than zero.",
+      "$ref": "#/$defs/duration"
+    },
+    "module": {
+      "description": "A WebAssembly module to gate. Each name once.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "scenario": {
+      "description": "A script that drives a module in Node.js and measures its memory.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/scenario" }
+    }
+  },
+  "$defs": {
+    "size": {
+      "description": "Bytes: a plain number in a string, or a number with B, kB, MB, GB, KiB, MiB or GiB, such as \"170 kB\" or \"26 MiB\".",
+      "type": "string",
+      "pattern": "^\\s*[0-9.]+\\s*(B|kB|KB|MB|GB|KiB|MiB|GiB)?\\s*$",
+      "examples": ["170 kB", "26 MiB", "0"]
+    },
+    "duration": {
+      "description": "A duration with ms, s or m, such as \"500ms\", \"30s\" or \"2m\".",
+      "type": "string",
+      "pattern": "^\\s*[0-9.]+\\s*(ms|s|m)\\s*$",
+      "examples": ["30s"]
+    },
+    "signature": {
+      "description": "A function signature as `check --details` prints it, such as \"(i32, i32) -> i32\". Spaces do not matter.",
+      "type": "string"
+    },
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "artifact"],
+      "properties": {
+        "name": {
+          "description": "The name used in reports, in the baseline and by `accept`.",
+          "type": "string"
+        },
+        "artifact": {
+          "description": "The .wasm file you ship; for wasm-bindgen, the processed pkg/*_bg.wasm.",
+          "type": "string"
+        },
+        "glue": {
+          "description": "The wasm-bindgen JavaScript glue, loaded as an ES module.",
+          "type": "string"
+        },
+        "budget": {
+          "description": "Limits that fail the check when exceeded. A missing value is not gated.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "raw": { "description": "Size of the file.", "$ref": "#/$defs/size" },
+            "gzip": { "description": "Size after gzip.", "$ref": "#/$defs/size" },
+            "brotli": { "description": "Size after brotli.", "$ref": "#/$defs/size" },
+            "peak_memory": {
+              "description": "Highest linear memory capacity after a scenario. Needs a scenario for the module.",
+              "$ref": "#/$defs/size"
+            },
+            "growth_per_run": {
+              "description": "What each run after the first may add to linear memory. Needs a scenario with repeat >= 2.",
+              "$ref": "#/$defs/size"
+            }
+          }
+        },
+        "policy": {
+          "description": "Compatibility rules for the inventory. Breaking one fails the check; accepting the baseline does not waive it.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "require_exports": {
+              "description": "Exports the module must have.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": {
+                  "name": { "description": "The export name.", "type": "string" },
+                  "signature": {
+                    "description": "If given, the export must be a function with exactly this signature.",
+                    "$ref": "#/$defs/signature"
+                  }
+                }
+              }
+            },
+            "allow_imports": {
+              "description": "The only imports the module may have; [] allows none.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["module", "name"],
+                "properties": {
+                  "module": { "description": "The import module.", "type": "string" },
+                  "name": { "description": "The import name.", "type": "string" },
+                  "signature": {
+                    "description": "If given, only a function of this signature is allowed.",
+                    "$ref": "#/$defs/signature"
+                  }
+                }
+              }
+            },
+            "allow_features": {
+              "description": "The only features the binary may need; [] allows none.",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "simd",
+                  "relaxed_simd",
+                  "shared_memory",
+                  "atomics",
+                  "acquire_release_atomics",
+                  "bulk_memory",
+                  "reference_types",
+                  "function_references",
+                  "gc",
+                  "exception_handling",
+                  "legacy_exception_handling",
+                  "tail_call",
+                  "multi_memory",
+                  "memory64",
+                  "multi_value",
+                  "sign_extension",
+                  "saturating_float_to_int",
+                  "mutable_globals",
+                  "extended_const",
+                  "wide_arithmetic",
+                  "memory_control",
+                  "stack_switching",
+                  "shared_everything_threads",
+                  "custom_descriptors",
+                  "js_string_builtins"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "file"],
+      "properties": {
+        "module": { "description": "The module it drives.", "type": "string" },
+        "file": {
+          "description": "The ES module whose default export runs once per repeat. Once per module: it is the scenario's identity in the baseline.",
+          "type": "string"
+        },
+        "repeat": {
+          "description": "How often the function runs on one instance. Default 1.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeout": {
+          "description": "This scenario's deadline, replacing scenario_timeout. Must be longer than zero.",
+          "$ref": "#/$defs/duration"
+        }
+      }
+    }
+  }
+}
