@@ -37,6 +37,8 @@ without scenarios needs no Node.
 Describe the modules in `peakmark.toml`, next to the baseline it will keep:
 
 ```toml
+#:schema https://casoon.github.io/peakmark/peakmark.schema.json
+
 [[module]]
 name     = "engine"
 artifact = "pkg/engine_bg.wasm"

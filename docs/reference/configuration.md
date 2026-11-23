@@ -7,6 +7,21 @@ order: 1
 `peakmark.toml` lists the modules, their budgets and their scenarios. Paths in it are relative to
 the file. Unknown keys are an error.
 
+## Editor support
+
+A JSON Schema of the file is published at
+<https://casoon.github.io/peakmark/peakmark.schema.json>. Editors with a TOML language server that
+reads schemas (Taplo, used by Even Better TOML, or Tombi) complete the keys, show what each one
+means and mark unknown keys, sizes and durations that do not parse, while you type. Name the schema
+in the first line of the file:
+
+```toml
+#:schema https://casoon.github.io/peakmark/peakmark.schema.json
+```
+
+The schema describes the same keys the parser accepts; what only peakmark can check, such as a
+scenario for a `peak_memory` budget or a module name used twice, is still reported by `check`.
+
 ```toml
 tolerance = "1%"
 
