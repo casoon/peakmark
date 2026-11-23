@@ -1,12 +1,13 @@
 ---
 title: Commands
-description: check and accept, their options and exit codes.
+description: check, accept and history, their options and exit codes.
 order: 2
 ---
 
 ```text
 peakmark check [--details] [--json]
 peakmark accept (<module>... | --all) --reason <text>
+peakmark history [<module>...] [--since <date>] [--json]
 ```
 
 ## `check`
@@ -35,15 +36,42 @@ It refuses a missing reason, a module that is over its budget and a module that 
   engine: raw size 463.8 kB, gzip size 195.8 kB, brotli size 159.2 kB, peak memory 23.6 MiB, memory growth per run 0 B
 ```
 
+## `history`
+
+Lists the baselines accepted so far, read from `peakmark.history.jsonl`: per module, oldest first,
+the day, the reason and either every value (the first entry) or what changed since the entry
+before. It measures nothing, runs no scenario and changes no file, so it needs no Node and always
+exits with `0` unless it cannot read the log.
+
+```text
+[INFO] peakmark history: engine
+
+  Modules: 1   Accepted: 3
+
+* engine (3)
+  - 2026-11-02 "first measurement": raw size 451.2 kB, gzip size 190.4 kB, brotli size 155.0 kB, peak memory 23.6 MiB, memory growth per run 0 B
+  - 2026-11-11 "pivot totals": raw size 463.8 kB (+12.6 kB), gzip size 195.8 kB (+5.4 kB), brotli size 159.2 kB (+4.2 kB)
+  - 2026-11-20 "cache released after export": peak memory 21.1 MiB (-2.5 MiB)
+```
+
+Without module names it lists every module in the log, including one no longer in the
+configuration. `--since 2026-11-01` lists only entries accepted on or after that day; the first of
+them is still compared with the entry before it. A value measured under other settings than the
+entry before it (other compression settings, another measurement protocol, other scenarios for the
+memory values) is shown with both values and marked as not comparable, never as growth; see
+[Changed coverage](../../concepts/budget-and-baseline/#changed-coverage). The values are the
+module-wide ones; the memory values per scenario are in `--json`.
+
 ## Options
 
 | Option | Meaning |
 |---|---|
 | `--config <file>` | configuration file, `peakmark.toml` by default |
 | `--details` | `check`: also list the measured values and the [inventory](../../concepts/inventory/) of every module, including why its largest functions are in it |
-| `--json` | `check`: print JSON instead of the report |
+| `--json` | `check`, `history`: print JSON instead of the report |
 | `--all` | `accept`: every configured module |
 | `--reason <text>` | `accept`: why the baseline changes |
+| `--since <date>` | `history`: only entries accepted on or after this day, `YYYY-MM-DD` |
 | `--color <mode>` | `auto`, `always` or `never` |
 
 ## Exit codes
@@ -98,3 +126,10 @@ the start function and the direct `callers`; see
 `explanations_omitted` counts the ones the cap left out; see
 [Explanations](../../concepts/explanations/#what-an-explanation-is-made-of). The findings they
 rest on stay complete in `issues` and `changes`.
+
+`history --json` prints `modules`, each with its `name` and `entries`, oldest first. An entry has
+`accepted`, `reason`, `values`, `scenarios` (the memory values per scenario), `contract`, `first`
+(`true` if no entry came before it) and `changes`: one object per module value that differs from
+the entry before, with its `rule` (`size/raw` and so on), `was`, `now` (`null` where the value was
+not measured) and `comparable`. The inventory snapshot of each entry stays in the log and is not
+printed.

@@ -8,6 +8,10 @@ change the configuration, the baseline format or the output.
 
 ### Added
 
+- **History:** `peakmark history` lists the accepted baselines per module with their reason and
+  what changed since the entry before, marks values measured under other settings as not
+  comparable, and takes module names, `--since` and `--json`. Details:
+  [Commands](https://casoon.github.io/peakmark/docs/reference/commands/#history).
 - **Unprocessed artifact:** `check` notes (rule `artifact/unprocessed-bindgen`, JSON `notes`) when
   the artifact exports functions named `__wbindgen_describe_*`, which `wasm-bindgen` removes when it
   processes a module. A note only, never a failure; peakmark cannot know which file you ship.

@@ -23,11 +23,12 @@ src/
 ├── snapshot.rs    the inventory as the baseline keeps it, and the diff of two: Snapshot, Drift, section and function drift
 ├── policy.rs      [module.policy]: required exports, allowed imports and features, Violation
 ├── reach.rs       the conservative reference graph of a module: Reach, Explanation (path from a root, callers)
+├── history.rs     the history log as a timeline per module: Timeline, Step, Delta
 ├── explain.rs     the ranked, evidence-backed explanations of a module's findings: Explanation, Explained
 ├── compress.rs    gzip and brotli length
 ├── runner.rs      runs a scenario in Node (runner.mjs) under a deadline, reads the memory capacity and coverage
 ├── check.rs       budget and baseline against the measured values: Issue, Change, Level, verdict
-├── report/        text report (text.rs) and JSON (json.rs)
+├── report/        text report (text.rs), JSON (json.rs), and both for the history (history.rs)
 ├── metric.rs      Metric and Values: the five gated values
 ├── digest.rs      SHA-256 of artifacts and scenario scripts
 ├── units.rs       "258 kB" in, "257.1 kB" out
@@ -66,6 +67,10 @@ tests/
 `peakmark accept` runs steps 1 to 3 for the chosen modules, refuses a module that is over its
 budget or breaks its policy, then `baseline::save` and `baseline::append_history` store the entry (`Entry::from_measured`:
 module values, per-scenario values, contract, inventory snapshot) and the reason.
+
+`peakmark history` runs step 1 and 2, then `baseline::load_history` reads the log,
+`history::timelines` groups it per module and compares each entry with the one before, and
+`report::history_report` or `report::history_json` prints it. Nothing is measured or written.
 
 ## Responsibilities
 
@@ -108,6 +113,9 @@ module values, per-scenario values, contract, inventory snapshot) and the reason
 - **Only `baseline` knows the file format.** It reads versions 1 and 2, writes 2, refuses others
   with `Error::BaselineVersion`, and replaces the file atomically. An entry from version 1 has no
   `contract` and no `scenarios`; `check` treats that as "compare the module values", never as zero.
+- **`history` reads, it does not judge.** It compares entries only with each other, never with a
+  budget or a fresh measurement, and marks a difference as not comparable where the contracts or
+  the scenarios of the two entries differ. Only `baseline` reads the log.
 - **Formats stay put.** The shapes of `peakmark.toml`, the baseline file, the history log and
   `--json` are public; changing them is a user-facing change.
 

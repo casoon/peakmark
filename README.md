@@ -9,8 +9,8 @@ a budget and with the values you last accepted. Over the budget, the check
 fails. Past the baseline, it warns and names the command that accepts the
 growth on purpose.
 
-> Built for modules made with `wasm-bindgen`; the commands are `check` and
-> `accept`.
+> Built for modules made with `wasm-bindgen`; the commands are `check`,
+> `accept` and `history`.
 
 Documentation: <https://casoon.github.io/peakmark/>
 

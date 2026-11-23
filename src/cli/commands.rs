@@ -7,6 +7,7 @@ use crate::baseline::{self, Baseline};
 use crate::check;
 use crate::config::{Config, Module};
 use crate::error::Error;
+use crate::history;
 use crate::measure::measure;
 use crate::report;
 
@@ -94,6 +95,37 @@ pub(super) fn accept(
     );
     for (name, entry) in &accepted {
         println!("  {name}: {}", entry.values.summary());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+pub(super) fn history(
+    config: &Config,
+    config_path: &Path,
+    modules: &[String],
+    since: Option<&str>,
+    json: bool,
+    console: Console,
+) -> Result<ExitCode, Error> {
+    let log = baseline::load_history(&config.dir)?;
+    // A module removed from the configuration keeps its history; only a name
+    // that is in neither is a mistake.
+    for name in modules {
+        let configured = config.modules.iter().any(|module| &module.name == name);
+        if !configured && !log.iter().any(|line| &line.module == name) {
+            return Err(Error::UnknownModule {
+                name: name.clone(),
+                config: config_path.to_path_buf(),
+            });
+        }
+    }
+    let timelines = history::timelines(log, modules, since);
+    if json {
+        let text = serde_json::to_string_pretty(&report::history_json(&timelines))
+            .expect("a history is plain data");
+        println!("{text}");
+    } else {
+        print!("{}", report::history_report(&timelines).render(console));
     }
     Ok(ExitCode::SUCCESS)
 }
