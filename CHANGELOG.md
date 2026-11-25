@@ -6,6 +6,11 @@ change the configuration, the baseline format or the output.
 
 ## [Unreleased]
 
+### Changed
+
+- **Pages:** the project site uses the current shared theme (0.18.0).
+
+
 ## [0.2.0] - 2026-11-23
 
 ### Breaking
